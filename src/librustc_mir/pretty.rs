@@ -230,6 +230,14 @@ fn write_mir_intro<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
                              mir: &Mir,
                              w: &mut Write)
                              -> io::Result<()> {
+    write_mir_sig(tcx, src, mir, w)?;
+    writeln!(w, " {{")?;
+    write_mir_decls(tcx, mir, w)
+}
+
+fn write_mir_sig(tcx: TyCtxt, src: MirSource, mir: &Mir, w: &mut Write)
+                 -> io::Result<()>
+{
     match src {
         MirSource::Fn(_) => write!(w, "fn")?,
         MirSource::Const(_) => write!(w, "const")?,
@@ -255,16 +263,18 @@ fn write_mir_intro<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
 
         // fn return type.
         match mir.return_ty {
-            ty::FnOutput::FnConverging(ty) => write!(w, "{}", ty)?,
-            ty::FnOutput::FnDiverging => write!(w, "!")?,
+            ty::FnOutput::FnConverging(ty) => write!(w, "{}", ty),
+            ty::FnOutput::FnDiverging => write!(w, "!"),
         }
     } else {
         assert!(mir.arg_decls.is_empty());
-        write!(w, ": {} =", mir.return_ty.unwrap())?;
+        write!(w, ": {} =", mir.return_ty.unwrap())
     }
+}
 
-    writeln!(w, " {{")?;
-
+fn write_mir_decls(tcx: TyCtxt, mir: &Mir, w: &mut Write)
+                   -> io::Result<()>
+{
     // User variable types (including the user's name in a comment).
     for (i, var) in mir.var_decls.iter().enumerate() {
         write!(w, "{}let ", INDENT)?;
