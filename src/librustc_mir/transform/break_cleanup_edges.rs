@@ -41,7 +41,7 @@ pub struct BreakCleanupEdges;
  */
 
 impl<'tcx> MirPass<'tcx> for BreakCleanupEdges {
-    fn run_pass(&mut self, tcx: &TyCtxt<'tcx>, src: MirSource, mir: &mut Mir<'tcx>) {
+    fn run_pass<'a>(&mut self, tcx: TyCtxt<'a, 'tcx, 'tcx>, src: MirSource, mir: &mut Mir<'tcx>) {
         let mut pred_count = vec![0u32; mir.basic_blocks.len()];
 
         // Build the precedecessor map for the MIR
