@@ -22,7 +22,7 @@ use std::fs::File;
 use std::io;
 use std::io::prelude::*;
 use std::marker::PhantomData;
-use std::path::PathBuf;
+use std::path::Path;
 
 use super::super::MirBorrowckCtxtPreDataflow;
 use bitslice::bits_to_string;
@@ -55,15 +55,14 @@ struct Graph<'a, 'tcx, MWF:'a> where MWF: MirWithFlowState<'tcx>,
 
 pub fn print_borrowck_graph_to<'b, 'a, 'tcx, BD>(
     mbcx: &MirBorrowckCtxtPreDataflow<'b, 'a, 'tcx, BD>,
-    path: &str) -> io::Result<()> where BD: BitDenotation<Ctxt=MoveData<'tcx>>,
+    path: &Path) -> io::Result<()> where BD: BitDenotation<Ctxt=MoveData<'tcx>>,
                                         BD::Bit: Debug
 {
     let g = Graph { mbcx: mbcx, phantom: PhantomData };
     let mut v = Vec::new();
     dot::render(&g, &mut v)?;
-    println!("print_borrowck_graph_to path: {} node_id: {}",
-             path, mbcx.node_id);
-    let mut path = PathBuf::from(path);
+    debug!("print_borrowck_graph_to path: {} node_id: {}",
+           path.display(), mbcx.node_id);
     File::create(path).and_then(|mut f| f.write_all(&v))
 }
 

@@ -17,6 +17,7 @@ use rustc::hir;
 use rustc::hir::intravisit::{FnKind};
 
 use rustc::mir::repr::{BasicBlock, BasicBlockData, Mir, Statement, Terminator};
+use rustc::session::Session;
 
 mod abs_domain;
 mod dataflow;
@@ -85,10 +86,40 @@ pub fn borrowck_mir<'b, 'a: 'b, 'tcx: 'a>(
                                  bd: BD) -> (MoveData<'tcx>, DataflowResults<BD>)
         where BD: BitDenotation<Ctxt=MoveData<'tcx>>, BD::Bit: Debug
     {
+        use syntax::attr::AttrMetaMethods;
+
+        let name_found = |sess: &Session, attrs: &[ast::Attribute], name| -> Option<String> {
+            for attr in attrs {
+                if attr.check_name("rustc_mir") {
+                    let items = attr.meta_item_list();
+                    for item in items.iter().flat_map(|l| l.iter()) {
+                        if item.check_name(name) {
+                            if let Some(s) = item.value_str() {
+                                return Some(s.to_string())
+                            } else {
+                                sess.span_err(
+                                    item.span,
+                                    &format!("{} attribute requires a path", item.name()));
+                                return None;
+                            }
+                        }
+                    }
+                }
+            }
+            return None;
+        };
+
+        let print_preflow_to =
+            name_found(bcx.tcx.sess, attributes, "borrowck_graphviz_preflow");
+        let print_postflow_to =
+            name_found(bcx.tcx.sess, attributes, "borrowck_graphviz_postflow");
+
         let mut mbcx = MirBorrowckCtxtPreDataflow {
             bcx: bcx,
             mir: mir,
             node_id: node_id,
+            print_preflow_to: print_preflow_to,
+            print_postflow_to: print_postflow_to,
             flow_state: DataflowAnalysis::new(mir, move_data, bd),
         };
 
@@ -104,6 +135,8 @@ pub struct MirBorrowckCtxtPreDataflow<'b, 'a: 'b, 'tcx: 'a, BD>
     mir: &'b Mir<'tcx>,
     node_id: ast::NodeId,
     flow_state: DataflowAnalysis<'a, 'tcx, BD>,
+    print_preflow_to: Option<String>,
+    print_postflow_to: Option<String>,
 }
 
 pub struct MirBorrowckCtxt<'b, 'a: 'b, 'tcx: 'a> {

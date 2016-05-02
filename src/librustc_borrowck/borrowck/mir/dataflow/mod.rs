@@ -17,6 +17,7 @@ use std::fmt::Debug;
 use std::io;
 use std::marker::PhantomData;
 use std::mem;
+use std::path::PathBuf;
 use std::usize;
 
 use super::MirBorrowckCtxtPreDataflow;
@@ -154,14 +155,33 @@ impl<'b, 'a: 'b, 'tcx: 'a, BD> PropagationContext<'b, 'a, 'tcx, BD>
 impl<'b, 'a: 'b, 'tcx: 'a, BD> MirBorrowckCtxtPreDataflow<'b, 'a, 'tcx, BD>
     where BD: BitDenotation<Ctxt=MoveData<'tcx>>, BD::Bit: Debug
 {
+    fn path(context: &str, prepost: &str, path: &str) -> PathBuf {
+        format!("{}_{}", context, prepost);
+        let mut path = PathBuf::from(path);
+        let new_file_name = {
+            let orig_file_name = path.file_name().unwrap().to_str().unwrap();
+            format!("{}_{}", context, orig_file_name)
+        };
+        path.set_file_name(new_file_name);
+        path
+    }
+
     fn pre_dataflow_instrumentation(&self) -> io::Result<()> {
-        // TODO put back graphviz calls after finishing other updates
-        Ok(())
+        if let Some(ref path_str) = self.print_preflow_to {
+            let path = Self::path(BD::name(), "preflow", path_str);
+            graphviz::print_borrowck_graph_to(self, &path)
+        } else {
+            Ok(())
+        }
     }
 
     fn post_dataflow_instrumentation(&self) -> io::Result<()> {
-        // TODO put back graphviz calls after finishing other updates
-        Ok(())
+        if let Some(ref path_str) = self.print_postflow_to {
+            let path = Self::path(BD::name(), "postflow", path_str);
+            graphviz::print_borrowck_graph_to(self, &path)
+        } else{
+            Ok(())
+        }
     }
 }
 
