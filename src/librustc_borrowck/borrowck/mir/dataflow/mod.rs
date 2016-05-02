@@ -22,8 +22,10 @@ use std::usize;
 use super::MirBorrowckCtxtPreDataflow;
 use super::gather_moves::{Location, MoveData, MovePathData, MovePathIndex, MoveOutIndex, PathMap};
 use super::gather_moves::{MoveOut, MovePath};
-// use super::graphviz;
+
 use bitslice::BitSlice; // adds set_bit/get_bit to &[usize] bitvector rep.
+
+mod graphviz;
 
 pub trait Dataflow {
     fn dataflow(&mut self);

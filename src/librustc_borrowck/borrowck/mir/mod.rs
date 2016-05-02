@@ -97,7 +97,7 @@ pub fn borrowck_mir<'b, 'a: 'b, 'tcx: 'a>(
     }
 }
 
-struct MirBorrowckCtxtPreDataflow<'b, 'a: 'b, 'tcx: 'a, BD>
+pub struct MirBorrowckCtxtPreDataflow<'b, 'a: 'b, 'tcx: 'a, BD>
     where BD: BitDenotation<Ctxt=MoveData<'tcx>>
 {
     bcx: &'b mut BorrowckCtxt<'a, 'tcx>,
