@@ -511,6 +511,27 @@ fn gather_moves<'a, 'tcx>(mir: &Mir<'tcx>, tcx: TyCtxt<'a, 'tcx, 'tcx>) -> MoveD
         rev_lookup: MovePathLookup::new(),
     };
 
+    // Before we analyze the program text, we create the MovePath's
+    // for all of the vars, args, and temps. (This enforces a basic
+    // property that even if the MIR body doesn't contain any
+    // references to a var/arg/temp, it will still be a valid
+    // operation to lookup the MovePath associated with it.)
+    assert!(mir.var_decls.len() <= ::std::u32::MAX as usize);
+    assert!(mir.arg_decls.len() <= ::std::u32::MAX as usize);
+    assert!(mir.temp_decls.len() <= ::std::u32::MAX as usize);
+    for var_idx in 0..mir.var_decls.len() {
+        let path_idx = builder.move_path_for(&Lvalue::Var(var_idx as u32));
+        path_map.fill_to(path_idx.idx());
+    }
+    for arg_idx in 0..mir.arg_decls.len() {
+        let path_idx = builder.move_path_for(&Lvalue::Arg(arg_idx as u32));
+        path_map.fill_to(path_idx.idx());
+    }
+    for temp_idx in 0..mir.temp_decls.len() {
+        let path_idx = builder.move_path_for(&Lvalue::Temp(temp_idx as u32));
+        path_map.fill_to(path_idx.idx());
+    }
+
     for bb in bbs {
         let loc_map_bb = &mut loc_map[bb.index()];
         let bb_data = mir.basic_block_data(bb);
