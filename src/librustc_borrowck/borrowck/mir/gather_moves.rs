@@ -56,6 +56,12 @@ mod indexes {
 pub use self::indexes::MovePathIndex;
 pub use self::indexes::MoveOutIndex;
 
+impl self::indexes::MoveOutIndex {
+    pub fn move_path_index(&self, move_data: &MoveData) -> MovePathIndex {
+        move_data.moves[self.idx()].path
+    }
+}
+
 /// `MovePath` is a canonicalized representation of a path that is
 /// moved or assigned to.
 ///
@@ -125,6 +131,7 @@ impl<'tcx> fmt::Debug for MovePath<'tcx> {
     }
 }
 
+#[derive(Debug)]
 pub struct MoveData<'tcx> {
     pub move_paths: MovePathData<'tcx>,
     pub moves: Vec<MoveOut>,
@@ -133,6 +140,7 @@ pub struct MoveData<'tcx> {
     pub rev_lookup: MovePathLookup<'tcx>,
 }
 
+#[derive(Debug)]
 pub struct LocMap {
     /// Location-indexed (BasicBlock for outer index, index within BB
     /// for inner index) map to list of MoveOutIndex's.
@@ -153,6 +161,7 @@ impl Index<Location> for LocMap {
     }
 }
 
+#[derive(Debug)]
 pub struct PathMap {
     /// Path-indexed map to list of MoveOutIndex's.
     ///
@@ -202,8 +211,13 @@ impl fmt::Debug for Location {
     }
 }
 
+#[derive(Debug)]
 pub struct MovePathData<'tcx> {
     move_paths: Vec<MovePath<'tcx>>,
+}
+
+impl<'tcx> MovePathData<'tcx> {
+    pub fn len(&self) -> usize { self.move_paths.len() }
 }
 
 impl<'tcx> Index<MovePathIndex> for MovePathData<'tcx> {
@@ -224,6 +238,7 @@ struct MovePathDataBuilder<'a, 'tcx: 'a> {
 }
 
 /// Tables mapping from an l-value to its MovePathIndex.
+#[derive(Debug)]
 pub struct MovePathLookup<'tcx> {
     vars: MovePathInverseMap,
     temps: MovePathInverseMap,
@@ -272,6 +287,7 @@ impl<T:Clone> FillTo for Vec<T> {
 
 #[derive(Clone, Debug)]
 enum LookupKind { Generate, Reuse }
+#[derive(Clone, Debug)]
 struct Lookup<T>(LookupKind, T);
 
 impl Lookup<MovePathIndex> {
@@ -609,16 +625,7 @@ fn gather_moves<'a, 'tcx>(mir: &Mir<'tcx>, tcx: TyCtxt<'a, 'tcx, 'tcx>) -> MoveD
                             // `TargetDataLayout::parse(&Session)` in
                             // `rustc::ty::layout`.
                             debug!("encountered Rvalue::Slice as RHS of Assign, source: {:?} \n{}",
-                                   source, {
-                                       let mut out = Vec::new();
-                                       {
-                                           use std::io::Write;
-                                           use rustc_mir::pretty::write_mir_named;
-                                           let mut w: &mut Write = &mut out;
-                                           write_mir_named(tcx, "boo_attempt_move_out_of_slice", mir, &mut w, None).unwrap();
-                                       }
-                                       String::from_utf8(out).unwrap()
-                                   });
+                                   source, "?");
                         }
                     }
                 }
@@ -794,15 +801,5 @@ impl<'b, 'a: 'b, 'tcx: 'a> BlockContext<'b, 'a, 'tcx> {
                 self.on_move_out_lval(stmt_kind, lval, source);
             }
         }
-    }
-}
-
-impl<'tcx> BitDenotation for MoveData<'tcx>{
-    type Bit = MoveOut;
-    fn bits_per_block(&self) -> usize {
-        self.moves.len()
-    }
-    fn interpret(&self, idx: usize) -> &Self::Bit {
-        &self.moves[idx]
     }
 }
