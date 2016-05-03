@@ -718,6 +718,7 @@ impl<'tcx> BitDenotation for MovingOutStatements<'tcx> {
                 // for children and associated fragment sets.
                 let move_path_index = rev_lookup.find(lvalue);
 
+                sets.kill_set.set_bit(move_path_index.idx());
                 on_all_children_bits(sets.kill_set,
                                      path_map,
                                      move_paths,
@@ -757,6 +758,8 @@ impl<'tcx> BitDenotation for MovingOutStatements<'tcx> {
                              dest_lval: &repr::Lvalue) {
         let move_path_index = move_data.rev_lookup.find(dest_lval);
         let bits_per_block = self.bits_per_block(move_data);
+
+        in_out.clear_bit(move_path_index.idx());
         on_all_children_bits(in_out,
                              &move_data.path_map,
                              &move_data.move_paths,
@@ -836,6 +839,7 @@ impl<'tcx> BitDenotation for MaybeInitializedLvals<'tcx> {
         let bits_per_block = self.bits_per_block(move_data);
         for &move_path_index in &paths {
             // (don't use zero_to_one since bit may already be set to 1.)
+            sets.kill_set.set_bit(move_path_index.idx());
             on_all_children_bits(sets.kill_set,
                                  path_map,
                                  move_paths,
@@ -862,6 +866,7 @@ impl<'tcx> BitDenotation for MaybeInitializedLvals<'tcx> {
                 // also clear the corresponding bit in the kill set, if any
                 let move_path_index = rev_lookup.find(lvalue);
 
+                sets.gen_set.set_bit(move_path_index.idx());
                 on_all_children_bits(sets.gen_set,
                                      path_map,
                                      move_paths,
@@ -872,6 +877,7 @@ impl<'tcx> BitDenotation for MaybeInitializedLvals<'tcx> {
                                          gen_set.set_bit(mpi.idx());
                                      });
 
+                sets.kill_set.clear_bit(move_path_index.idx());
                 on_all_children_bits(sets.kill_set,
                                      path_map,
                                      move_paths,
@@ -901,6 +907,7 @@ impl<'tcx> BitDenotation for MaybeInitializedLvals<'tcx> {
         let bits_per_block = self.bits_per_block(move_data);
         for &move_path_index in &paths {
             // (don't use zero_to_one since bit may already be set to 1.)
+            sets.kill_set.set_bit(move_path_index.idx());
             on_all_children_bits(sets.kill_set,
                                  path_map,
                                  move_paths,
@@ -923,6 +930,7 @@ impl<'tcx> BitDenotation for MaybeInitializedLvals<'tcx> {
         // the bits for that dest_lval to 1 (initialized).
         let move_path_index = move_data.rev_lookup.find(dest_lval);
         let bits_per_block = self.bits_per_block(move_data);
+        in_out.set_bit(move_path_index.idx());
         on_all_children_bits(in_out,
                              &move_data.path_map,
                              &move_data.move_paths,
@@ -985,6 +993,7 @@ impl<'tcx> BitDenotation for MaybeUninitializedLvals<'tcx> {
         let bits_per_block = self.bits_per_block(move_data);
         for &move_path_index in &paths {
             // (don't use zero_to_one since bit may already be set to 1.)
+            sets.gen_set.set_bit(move_path_index.idx());
             on_all_children_bits(sets.gen_set,
                                  path_map,
                                  move_paths,
@@ -1005,6 +1014,7 @@ impl<'tcx> BitDenotation for MaybeUninitializedLvals<'tcx> {
                 // also clear the corresponding bit in the kill set, if any
                 let move_path_index = rev_lookup.find(lvalue);
 
+                sets.kill_set.set_bit(move_path_index.idx());
                 on_all_children_bits(sets.kill_set,
                                      path_map,
                                      move_paths,
@@ -1034,6 +1044,7 @@ impl<'tcx> BitDenotation for MaybeUninitializedLvals<'tcx> {
         let bits_per_block = self.bits_per_block(move_data);
         for &move_path_index in &paths[..] {
             // (don't use zero_to_one since bit may already be set to 1.)
+            sets.kill_set.set_bit(move_path_index.idx());
             on_all_children_bits(sets.kill_set,
                                  path_map,
                                  move_paths,
@@ -1057,6 +1068,7 @@ impl<'tcx> BitDenotation for MaybeUninitializedLvals<'tcx> {
         // clear the bits for that (definitely initialized) dest_lval.
         let move_path_index = move_data.rev_lookup.find(dest_lval);
         let bits_per_block = self.bits_per_block(move_data);
+        in_out.clear_bit(move_path_index.idx());
         on_all_children_bits(in_out,
                              &move_data.path_map,
                              &move_data.move_paths,
