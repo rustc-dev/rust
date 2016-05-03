@@ -142,7 +142,7 @@ pub fn borrowck_mir<'b, 'a: 'b, 'tcx: 'a>(
             node_id: node_id,
             print_preflow_to: print_preflow_to,
             print_postflow_to: print_postflow_to,
-            flow_state: DataflowAnalysis::new(mir, move_data, bd),
+            flow_state: DataflowAnalysis::new(bcx.tcx, mir, move_data, bd),
         };
 
         mbcx.dataflow();
