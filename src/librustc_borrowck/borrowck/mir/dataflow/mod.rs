@@ -308,7 +308,7 @@ impl<O: BitDenotation> DataflowState<O> {
         //! Helper for iterating over the bits in a bitvector.
 
         let bits_per_block = self.operator.bits_per_block(ctxt);
-        let usize_bits: usize = mem::size_of::<usize>() * 8
+        let usize_bits: usize = mem::size_of::<usize>() * 8;
             
         for (word_index, &word) in words.iter().enumerate() {
             if word != 0 {
