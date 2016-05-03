@@ -26,7 +26,10 @@ use super::gather_moves::{MoveOut, MovePath};
 
 use bitslice::BitSlice; // adds set_bit/get_bit to &[usize] bitvector rep.
 
+pub use self::info_warn::issue_result_info;
+
 mod graphviz;
+mod info_warn;
 
 pub trait Dataflow {
     fn dataflow(&mut self);
@@ -215,6 +218,12 @@ impl<'a, 'tcx: 'a, O> DataflowAnalysis<'a, 'tcx, O>
 
 #[derive(Debug)]
 pub struct DataflowResults<O: BitDenotation>(DataflowState<O>);
+
+impl<O: BitDenotation> DataflowResults<O> {
+    fn sets(&self) -> &AllSets {
+        &self.0.sets
+    }
+}
 
 #[derive(Debug)]
 struct DataflowState<O: BitDenotation>

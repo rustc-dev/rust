@@ -10,8 +10,10 @@
 
 use borrowck::BorrowckCtxt;
 
-use syntax::ast;
+use syntax::ast::{self, MetaItem};
+use syntax::attr::AttrMetaMethods;
 use syntax::codemap::Span;
+use syntax::ptr::P;
 
 use rustc::hir;
 use rustc::hir::intravisit::{FnKind};
@@ -36,6 +38,20 @@ pub struct BorrowckMirData<'tcx> {
     pub move_data: MoveData<'tcx>,
     pub flow_inits: DataflowResults<MaybeInitializedLvals<'tcx>>,
     pub flow_uninits: DataflowResults<MaybeUninitializedLvals<'tcx>>,
+}
+
+fn has_rustc_mir_with(attrs: &[ast::Attribute], name: &str) -> Option<P<MetaItem>> {
+    for attr in attrs {
+        if attr.check_name("rustc_mir") {
+            let items = attr.meta_item_list();
+            for item in items.iter().flat_map(|l| l.iter()) {
+                if item.check_name(name) {
+                    return Some(item.clone())
+                }
+            }
+        }
+    }
+    return None;
 }
 
 pub fn borrowck_mir<'b, 'a: 'b, 'tcx: 'a>(
@@ -63,6 +79,19 @@ pub fn borrowck_mir<'b, 'a: 'b, 'tcx: 'a>(
     let (move_data, flow_uninits) =
         do_dataflow(bcx, mir, id, attributes, move_data, MaybeUninitializedLvals::default());
 
+    if has_rustc_mir_with(attributes, "dataflow_info_maybe_init").is_some() {
+        dataflow::issue_result_info(bcx.tcx.sess,
+                                    mir,
+                                    &move_data,
+                                    &flow_inits);
+    }
+    if has_rustc_mir_with(attributes, "dataflow_info_maybe_uninit").is_some() {
+        dataflow::issue_result_info(bcx.tcx.sess,
+                                    mir,
+                                    &move_data,
+                                    &flow_uninits);
+    }
+
     let mut mbcx = MirBorrowckCtxt {
         bcx: bcx,
         mir: mir,
@@ -89,21 +118,14 @@ pub fn borrowck_mir<'b, 'a: 'b, 'tcx: 'a>(
         use syntax::attr::AttrMetaMethods;
 
         let name_found = |sess: &Session, attrs: &[ast::Attribute], name| -> Option<String> {
-            for attr in attrs {
-                if attr.check_name("rustc_mir") {
-                    let items = attr.meta_item_list();
-                    for item in items.iter().flat_map(|l| l.iter()) {
-                        if item.check_name(name) {
-                            if let Some(s) = item.value_str() {
-                                return Some(s.to_string())
-                            } else {
-                                sess.span_err(
-                                    item.span,
-                                    &format!("{} attribute requires a path", item.name()));
-                                return None;
-                            }
-                        }
-                    }
+            if let Some(item) = has_rustc_mir_with(attrs, name) {
+                if let Some(s) = item.value_str() {
+                    return Some(s.to_string())
+                } else {
+                    sess.span_err(
+                        item.span,
+                        &format!("{} attribute requires a path", item.name()));
+                    return None;
                 }
             }
             return None;
