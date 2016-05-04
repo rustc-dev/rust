@@ -27,23 +27,24 @@ use std::path::Path;
 use super::super::MirBorrowckCtxtPreDataflow;
 use bitslice::bits_to_string;
 use super::{BitDenotation, DataflowState};
+use super::{HasMoveData};
 use super::super::gather_moves::{MoveData};
 
 pub trait MirWithFlowState<'tcx> {
-    type BD: BitDenotation<Ctxt=MoveData<'tcx>>;
+    type BD: BitDenotation;
     fn node_id(&self) -> NodeId;
     fn mir(&self) -> &Mir<'tcx>;
-    fn move_data(&self) -> &MoveData<'tcx>;
+    fn analysis_ctxt(&self) -> &<Self::BD as BitDenotation>::Ctxt;
     fn flow_state(&self) -> &DataflowState<Self::BD>;
 }
 
 impl<'b, 'a: 'b, 'tcx: 'a, BD> MirWithFlowState<'tcx> for MirBorrowckCtxtPreDataflow<'b, 'a, 'tcx, BD>
-    where 'a: 'b, 'tcx: 'a, BD: BitDenotation<Ctxt=MoveData<'tcx>>
+    where 'a: 'b, 'tcx: 'a, BD: BitDenotation, BD::Ctxt: HasMoveData<'tcx>
 {
     type BD = BD;
     fn node_id(&self) -> NodeId { self.node_id }
     fn mir(&self) -> &Mir<'tcx> { self.mir }
-    fn move_data(&self) -> &MoveData<'tcx> { &self.flow_state.move_data }
+    fn analysis_ctxt(&self) -> &BD::Ctxt { &self.flow_state.ctxt }
     fn flow_state(&self) -> &DataflowState<Self::BD> { &self.flow_state.flow_state }
 }
 
@@ -55,8 +56,8 @@ struct Graph<'a, 'tcx, MWF:'a> where MWF: MirWithFlowState<'tcx>,
 
 pub fn print_borrowck_graph_to<'b, 'a, 'tcx, BD>(
     mbcx: &MirBorrowckCtxtPreDataflow<'b, 'a, 'tcx, BD>,
-    path: &Path) -> io::Result<()> where BD: BitDenotation<Ctxt=MoveData<'tcx>>,
-                                        BD::Bit: Debug
+    path: &Path) -> io::Result<()> where BD: BitDenotation,
+                                        BD::Bit: Debug, BD::Ctxt: HasMoveData<'tcx>
 {
     let g = Graph { mbcx: mbcx, phantom: PhantomData };
     let mut v = Vec::new();
@@ -169,7 +170,7 @@ impl<'a, 'tcx, MWF> dot::Labeller<'a> for Graph<'a, 'tcx, MWF>
         ::rustc_mir::graphviz::write_node_label(
             *n, self.mbcx.mir(), &mut v, 4,
             |w| {
-                let ctxt = self.mbcx.move_data();
+                let ctxt = self.mbcx.analysis_ctxt();
                 let flow = self.mbcx.flow_state();
                 let entry_interp = flow.interpret_set(ctxt, flow.sets.on_entry_set_for(i));
                 chunked_present_left(w, &entry_interp[..], chunk_size)?;
@@ -184,7 +185,7 @@ impl<'a, 'tcx, MWF> dot::Labeller<'a> for Graph<'a, 'tcx, MWF>
                        entrybits=bits_to_string(entry, bits_per_block))
             },
             |w| {
-                let ctxt = self.mbcx.move_data();
+                let ctxt = self.mbcx.analysis_ctxt();
                 let flow = self.mbcx.flow_state();
                 let gen_interp = flow.interpret_set(ctxt, flow.sets.gen_set_for(i));
                 let kill_interp = flow.interpret_set(ctxt, flow.sets.kill_set_for(i));

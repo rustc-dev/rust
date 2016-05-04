@@ -28,15 +28,16 @@ mod gather_moves;
 
 use self::dataflow::{BitDenotation};
 use self::dataflow::{Dataflow, DataflowAnalysis, DataflowResults};
+use self::dataflow::{HasMoveData};
 use self::dataflow::{MaybeInitializedLvals, MaybeUninitializedLvals};
 use self::gather_moves::{MoveData};
 
 use std::fmt::Debug;
 
 #[derive(Debug)]
-pub struct BorrowckMirData<'tcx> {
+pub struct BorrowckMirData<'a, 'tcx: 'a> {
     pub move_data: MoveData<'tcx>,
-    pub flow_inits: DataflowResults<MaybeInitializedLvals<'tcx>>,
+    pub flow_inits: DataflowResults<MaybeInitializedLvals<'a, 'tcx>>,
     pub flow_uninits: DataflowResults<MaybeUninitializedLvals<'tcx>>,
 }
 
@@ -54,8 +55,8 @@ fn has_rustc_mir_with(attrs: &[ast::Attribute], name: &str) -> Option<P<MetaItem
     return None;
 }
 
-pub fn borrowck_mir<'b, 'a: 'b, 'tcx: 'a>(
-    bcx: &'b mut BorrowckCtxt<'a, 'tcx>,
+pub fn borrowck_mir<'a, 'tcx: 'a>(
+    bcx: &mut BorrowckCtxt<'a, 'tcx>,
     fk: FnKind,
     _decl: &hir::FnDecl,
     mir: &'a Mir<'tcx>,
@@ -74,17 +75,19 @@ pub fn borrowck_mir<'b, 'a: 'b, 'tcx: 'a>(
     }
 
     let move_data = MoveData::gather_moves(mir, bcx.tcx);
-    let (move_data, flow_inits) =
-        do_dataflow(bcx, mir, id, attributes, move_data, MaybeInitializedLvals::default());
+    let ctxt = (bcx.tcx, mir, move_data);
+    let ((_, _, move_data), flow_inits) =
+        do_dataflow(bcx, mir, id, attributes, ctxt, MaybeInitializedLvals::default());
     let (move_data, flow_uninits) =
         do_dataflow(bcx, mir, id, attributes, move_data, MaybeUninitializedLvals::default());
 
-    if has_rustc_mir_with(attributes, "dataflow_info_maybe_init").is_some() {
-        dataflow::issue_result_info(bcx.tcx.sess,
-                                    mir,
-                                    &move_data,
-                                    &flow_inits);
-    }
+    let move_data = if has_rustc_mir_with(attributes, "dataflow_info_maybe_init").is_some() {
+        let ctxt = (bcx.tcx, mir, move_data);
+        dataflow::issue_result_info(bcx.tcx.sess, mir, &ctxt, &flow_inits);
+        ctxt.2
+    } else {
+        move_data
+    };
     if has_rustc_mir_with(attributes, "dataflow_info_maybe_uninit").is_some() {
         dataflow::issue_result_info(bcx.tcx.sess,
                                     mir,
@@ -111,9 +114,9 @@ pub fn borrowck_mir<'b, 'a: 'b, 'tcx: 'a>(
                                  mir: &'a Mir<'tcx>,
                                  node_id: ast::NodeId,
                                  attributes: &[ast::Attribute],
-                                 move_data: MoveData<'tcx>,
-                                 bd: BD) -> (MoveData<'tcx>, DataflowResults<BD>)
-        where BD: BitDenotation<Ctxt=MoveData<'tcx>>, BD::Bit: Debug
+                                 ctxt: BD::Ctxt,
+                                 bd: BD) -> (BD::Ctxt, DataflowResults<BD>)
+        where BD: BitDenotation, BD::Bit: Debug, BD::Ctxt: HasMoveData<'tcx>
     {
         use syntax::attr::AttrMetaMethods;
 
@@ -142,7 +145,7 @@ pub fn borrowck_mir<'b, 'a: 'b, 'tcx: 'a>(
             node_id: node_id,
             print_preflow_to: print_preflow_to,
             print_postflow_to: print_postflow_to,
-            flow_state: DataflowAnalysis::new(bcx.tcx, mir, move_data, bd),
+            flow_state: DataflowAnalysis::new(bcx.tcx, mir, ctxt, bd),
         };
 
         mbcx.dataflow();
@@ -151,7 +154,7 @@ pub fn borrowck_mir<'b, 'a: 'b, 'tcx: 'a>(
 }
 
 pub struct MirBorrowckCtxtPreDataflow<'b, 'a: 'b, 'tcx: 'a, BD>
-    where BD: BitDenotation<Ctxt=MoveData<'tcx>>
+    where BD: BitDenotation, BD::Ctxt: HasMoveData<'tcx>
 {
     bcx: &'b mut BorrowckCtxt<'a, 'tcx>,
     mir: &'b Mir<'tcx>,
@@ -166,7 +169,7 @@ pub struct MirBorrowckCtxt<'b, 'a: 'b, 'tcx: 'a> {
     mir: &'b Mir<'tcx>,
     node_id: ast::NodeId,
     move_data: MoveData<'tcx>,
-    flow_inits: DataflowResults<MaybeInitializedLvals<'tcx>>,
+    flow_inits: DataflowResults<MaybeInitializedLvals<'a, 'tcx>>,
     flow_uninits: DataflowResults<MaybeUninitializedLvals<'tcx>>
 }
 

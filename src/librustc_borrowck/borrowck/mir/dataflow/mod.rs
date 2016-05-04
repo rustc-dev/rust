@@ -36,7 +36,7 @@ pub trait Dataflow {
 }
 
 impl<'b, 'a: 'b, 'tcx: 'a, BD> Dataflow for MirBorrowckCtxtPreDataflow<'b, 'a, 'tcx, BD>
-    where BD: BitDenotation<Ctxt=MoveData<'tcx>>, BD::Bit: Debug
+    where BD: BitDenotation, BD::Bit: Debug, BD::Ctxt: HasMoveData<'tcx>
 {
     fn dataflow(&mut self) {
         self.flow_state.build_sets();
@@ -47,14 +47,14 @@ impl<'b, 'a: 'b, 'tcx: 'a, BD> Dataflow for MirBorrowckCtxtPreDataflow<'b, 'a, '
 }
 
 struct PropagationContext<'b, 'a: 'b, 'tcx: 'a, O>
-    where O: 'b + BitDenotation<Ctxt=MoveData<'tcx>>,
+    where O: 'b + BitDenotation, O::Ctxt: HasMoveData<'tcx>,
 {
     builder: &'b mut DataflowAnalysis<'a, 'tcx, O>,
     changed: bool,
 }
 
 impl<'a, 'tcx: 'a, BD> DataflowAnalysis<'a, 'tcx, BD>
-    where BD: BitDenotation<Ctxt=MoveData<'tcx>>
+    where BD: BitDenotation, BD::Ctxt: HasMoveData<'tcx>
 {
     fn propagate(&mut self) {
         let mut temp = vec![0; self.flow_state.sets.words_per_block];
@@ -76,11 +76,11 @@ impl<'a, 'tcx: 'a, BD> DataflowAnalysis<'a, 'tcx, BD>
         // directly to gen-sets here). But we still need to figure out
         // the kill-sets.
 
-        let move_data = &self.move_data;
+        let move_data = self.ctxt.move_data();
 
         {
             let sets = &mut self.flow_state.sets.for_block(repr::START_BLOCK.index());
-            self.flow_state.operator.start_block_effect(self.tcx, move_data, self.mir, sets);
+            self.flow_state.operator.start_block_effect(self.tcx, &self.ctxt, self.mir, sets);
         }
 
         for bb in self.mir.all_basic_blocks() {
@@ -91,12 +91,12 @@ impl<'a, 'tcx: 'a, BD> DataflowAnalysis<'a, 'tcx, BD>
 
             let sets = &mut self.flow_state.sets.for_block(bb.index());
             for j_stmt in statements.iter().enumerate() {
-                self.flow_state.operator.statement_effect(self.tcx, &self.move_data, sets, bb, j_stmt);
+                self.flow_state.operator.statement_effect(self.tcx, &self.ctxt, sets, bb, j_stmt);
             }
 
             if let Some(ref term) = *terminator {
                 let stmts_len = statements.len();
-                self.flow_state.operator.terminator_effect(self.tcx, &self.move_data, sets, bb, (stmts_len, term));
+                self.flow_state.operator.terminator_effect(self.tcx, &self.ctxt, sets, bb, (stmts_len, term));
             }
         }
     }
@@ -128,7 +128,7 @@ fn on_all_children_bits<Each>(set: &mut [usize],
 }
 
 impl<'b, 'a: 'b, 'tcx: 'a, BD> PropagationContext<'b, 'a, 'tcx, BD>
-    where BD: BitDenotation<Ctxt=MoveData<'tcx>>
+    where BD: BitDenotation, BD::Ctxt: HasMoveData<'tcx>
 {
     fn reset(&mut self, bits: &mut [usize]) {
         let e = if BD::initial_value() {usize::MAX} else {0};
@@ -156,7 +156,7 @@ impl<'b, 'a: 'b, 'tcx: 'a, BD> PropagationContext<'b, 'a, 'tcx, BD>
 }
 
 impl<'b, 'a: 'b, 'tcx: 'a, BD> MirBorrowckCtxtPreDataflow<'b, 'a, 'tcx, BD>
-    where BD: BitDenotation<Ctxt=MoveData<'tcx>>, BD::Bit: Debug
+    where BD: BitDenotation, BD::Bit: Debug, BD::Ctxt: HasMoveData<'tcx>
 {
     fn path(context: &str, prepost: &str, path: &str) -> PathBuf {
         format!("{}_{}", context, prepost);
@@ -200,20 +200,31 @@ impl Bits {
     }
 }
 
+pub trait HasMoveData<'tcx> {
+    fn move_data(&self) -> &MoveData<'tcx>;
+}
+
+impl<'tcx> HasMoveData<'tcx> for MoveData<'tcx> {
+    fn move_data(&self) -> &MoveData<'tcx> { self }
+}
+impl<'tcx, A, B> HasMoveData<'tcx> for (A, B, MoveData<'tcx>) {
+    fn move_data(&self) -> &MoveData<'tcx> { &self.2 }
+}
+
 pub struct DataflowAnalysis<'a, 'tcx: 'a, O>
-    where O: BitDenotation<Ctxt=MoveData<'tcx>>
+    where O: BitDenotation, O::Ctxt: HasMoveData<'tcx>
 {
     flow_state: DataflowState<O>,
-    move_data: MoveData<'tcx>,
+    ctxt: O::Ctxt,
     mir: &'a Mir<'tcx>,
     tcx: &'a TyCtxt<'tcx>,
 }
 
 impl<'a, 'tcx: 'a, O> DataflowAnalysis<'a, 'tcx, O>
-    where O: BitDenotation<Ctxt=MoveData<'tcx>>
+    where O: BitDenotation, O::Ctxt: HasMoveData<'tcx>
 {
-    pub fn results(self) -> (MoveData<'tcx>, DataflowResults<O>) {
-        (self.move_data, DataflowResults(self.flow_state))
+    pub fn results(self) -> (O::Ctxt, DataflowResults<O>) {
+        (self.ctxt, DataflowResults(self.flow_state))
     }
 }
 
@@ -461,13 +472,13 @@ pub trait BitDenotation: DataflowOperator {
 }
 
 impl<'a, 'tcx: 'a, D> DataflowAnalysis<'a, 'tcx, D>
-    where D: BitDenotation<Ctxt=MoveData<'tcx>>
+    where D: BitDenotation, D::Ctxt: HasMoveData<'tcx>
 {
     pub fn new(tcx: &'a TyCtxt<'tcx>,
                mir: &'a Mir<'tcx>,
-               move_data: MoveData<'tcx>,
+               ctxt: D::Ctxt,
                denotation: D) -> Self {
-        let bits_per_block = denotation.bits_per_block(&move_data);
+        let bits_per_block = denotation.bits_per_block(&ctxt);
         let usize_bits = mem::size_of::<usize>() * 8;
         let words_per_block = (bits_per_block + usize_bits - 1) / usize_bits;
         let num_blocks = mir.basic_blocks.len();
@@ -488,7 +499,7 @@ impl<'a, 'tcx: 'a, D> DataflowAnalysis<'a, 'tcx, D>
             },
             operator: denotation,
         },
-                           move_data: move_data,
+                           ctxt: ctxt,
                            mir: mir,
                            tcx: tcx,
         }
@@ -497,7 +508,7 @@ impl<'a, 'tcx: 'a, D> DataflowAnalysis<'a, 'tcx, D>
 }
 
 impl<'a, 'tcx: 'a, D> DataflowAnalysis<'a, 'tcx, D>
-    where D: BitDenotation<Ctxt=MoveData<'tcx>>
+    where D: BitDenotation, D::Ctxt: HasMoveData<'tcx>
 {
     /// Propagates the bits of `in_out` into all the successors of `bb`,
     /// using bitwise operator denoted by `self.operator`.
@@ -547,7 +558,7 @@ impl<'a, 'tcx: 'a, D> DataflowAnalysis<'a, 'tcx, D>
                     // N.B.: This must be done *last*, after all other
                     // propagation, as documented in comment above.
                     self.flow_state.operator.propagate_call_return(
-                        self.tcx, &self.move_data, in_out, bb, *dest_bb, dest_lval);
+                        self.tcx, &self.ctxt, in_out, bb, *dest_bb, dest_lval);
                     self.propagate_bits_into_entry_set_for(in_out, changed, dest_bb);
                 }
             }
@@ -618,9 +629,9 @@ impl<'a, 'tcx: 'a, D> DataflowAnalysis<'a, 'tcx, D>
 /// between this data and `MaybeUninitializedLvals` yields the set of
 /// l-values that would require a dynamic drop-flag at that statement.
 #[derive(Debug, Default)]
-pub struct MaybeInitializedLvals<'tcx> {
+pub struct MaybeInitializedLvals<'a, 'tcx: 'a> {
     // See "Note on PhantomData" above.
-    phantom: PhantomData<for <'a> Fn(&'a MoveData<'tcx>)>,
+    phantom: PhantomData<Fn(&'a MoveData<'tcx>, &'a TyCtxt<'tcx>, &'a Mir<'tcx>)>,
 }
 
 /// `MaybeUninitializedLvals` tracks all l-values that might be
@@ -784,24 +795,25 @@ impl<'tcx> BitDenotation for MovingOutStatements<'tcx> {
     }
 }
 
-impl<'tcx> BitDenotation for MaybeInitializedLvals<'tcx> {
+impl<'a, 'tcx> BitDenotation for MaybeInitializedLvals<'a, 'tcx> {
     type Bit = MovePath<'tcx>;
-    type Ctxt = MoveData<'tcx>; 
+    type Ctxt = (&'a TyCtxt<'tcx>, &'a Mir<'tcx>, MoveData<'tcx>);
     fn name() -> &'static str { "maybe_init" }
     fn bits_per_block(&self, ctxt: &Self::Ctxt) -> usize {
-        ctxt.move_paths.len()
+        ctxt.2.move_paths.len()
     }
     fn interpret<'c>(&self, ctxt: &'c Self::Ctxt, idx: usize) -> &'c Self::Bit {
-        &ctxt.move_paths[MovePathIndex::new(idx)]
+        &ctxt.2.move_paths[MovePathIndex::new(idx)]
     }
 
     // sets on_entry bits for Arg lvalues
     fn start_block_effect(&self,
                           tcx: &TyCtxt,
-                          move_data: &Self::Ctxt,
+                          ctxt: &Self::Ctxt,
                           mir: &Mir,
                           sets: &mut BlockSets) {
-        let bits_per_block = self.bits_per_block(move_data);
+        let move_data = &ctxt.2;
+        let bits_per_block = self.bits_per_block(ctxt);
 
         on_all_children_of_arg_lvalues(
             move_data, mir, sets, &|on_entry, moi| {
@@ -833,10 +845,11 @@ impl<'tcx> BitDenotation for MaybeInitializedLvals<'tcx> {
     // kills bits for lvalues moved-out by statement
     fn statement_effect(&self,
                         tcx: &TyCtxt,
-                        move_data: &Self::Ctxt,
+                        ctxt: &Self::Ctxt,
                         sets: &mut BlockSets,
                         bb: repr::BasicBlock,
                         (idx, stmt): (usize, &repr::Statement)) {
+        let move_data = &ctxt.2;
         let move_paths = &move_data.move_paths;
         let loc_map = &move_data.loc_map;
         let path_map = &move_data.path_map;
@@ -851,7 +864,7 @@ impl<'tcx> BitDenotation for MaybeInitializedLvals<'tcx> {
         let paths = move_outs_paths(move_data, &move_outs[..]);
         debug!("stmt {:?} at loc {:?} moves out of paths {:?}",
                stmt, loc, paths);
-        let bits_per_block = self.bits_per_block(move_data);
+        let bits_per_block = self.bits_per_block(ctxt);
         for &move_path_index in &paths {
             // (don't use zero_to_one since bit may already be set to 1.)
             sets.kill_set.set_bit(move_path_index.idx());
@@ -908,10 +921,11 @@ impl<'tcx> BitDenotation for MaybeInitializedLvals<'tcx> {
 
     fn terminator_effect(&self,
                          tcx: &TyCtxt,
-                         move_data: &Self::Ctxt,
+                         ctxt: &Self::Ctxt,
                          sets: &mut BlockSets,
                          bb: repr::BasicBlock,
                          (statements_len, term): (usize, &repr::Terminator)) {
+        let move_data = &ctxt.2;
         let move_paths = &move_data.move_paths;
         let loc_map = &move_data.loc_map;
         let path_map = &move_data.path_map;
@@ -920,7 +934,7 @@ impl<'tcx> BitDenotation for MaybeInitializedLvals<'tcx> {
         let paths = move_outs_paths(move_data, &loc_map[loc]);
         debug!("terminator {:?} at loc {:?} moves out of paths {:?}",
                term, loc, &paths);
-        let bits_per_block = self.bits_per_block(move_data);
+        let bits_per_block = self.bits_per_block(ctxt);
         for &move_path_index in &paths {
             // (don't use zero_to_one since bit may already be set to 1.)
             sets.kill_set.set_bit(move_path_index.idx());
@@ -938,15 +952,16 @@ impl<'tcx> BitDenotation for MaybeInitializedLvals<'tcx> {
 
     fn propagate_call_return(&self,
                              tcx: &TyCtxt,
-                             move_data: &Self::Ctxt,
+                             ctxt: &Self::Ctxt,
                              in_out: &mut [usize],
                              call_bb: repr::BasicBlock,
                              dest_bb: repr::BasicBlock,
                              dest_lval: &repr::Lvalue) {
         // when a call returns successfully, that means we need to set
         // the bits for that dest_lval to 1 (initialized).
+        let move_data = &ctxt.2;
         let move_path_index = move_data.rev_lookup.find(dest_lval);
-        let bits_per_block = self.bits_per_block(move_data);
+        let bits_per_block = self.bits_per_block(ctxt);
         in_out.set_bit(move_path_index.idx());
         on_all_children_bits(in_out,
                              &move_data.path_map,
@@ -1114,10 +1129,10 @@ fn move_outs_paths(move_data: &MoveData,
         .collect()
 }
 
-fn on_all_children_of_arg_lvalues<'tcx, Each>(move_data: &MoveData,
-                                              mir: &Mir,
-                                              sets: &mut BlockSets,
-                                              each_child: &Each)
+fn on_all_children_of_arg_lvalues<Each>(move_data: &MoveData,
+                                        mir: &Mir,
+                                        sets: &mut BlockSets,
+                                        each_child: &Each)
     where Each: Fn(&mut [usize], MoveOutIndex)
 {
     let move_paths = &move_data.move_paths;
@@ -1142,7 +1157,7 @@ impl<'tcx> BitwiseOperator for MovingOutStatements<'tcx> {
     }
 }
 
-impl<'tcx> BitwiseOperator for MaybeInitializedLvals<'tcx> {
+impl<'a, 'tcx> BitwiseOperator for MaybeInitializedLvals<'a, 'tcx> {
     #[inline]
     fn join(&self, pred1: usize, pred2: usize) -> usize {
         pred1 | pred2 // "maybe" means we union effects of both preds
@@ -1163,7 +1178,7 @@ impl<'tcx> DataflowOperator for MovingOutStatements<'tcx> {
     }
 }
 
-impl<'tcx> DataflowOperator for MaybeInitializedLvals<'tcx> {
+impl<'a, 'tcx> DataflowOperator for MaybeInitializedLvals<'a, 'tcx> {
     #[inline]
     fn initial_value() -> bool {
         false // lvalues start uninitialized
