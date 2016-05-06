@@ -9,6 +9,7 @@
 // except according to those terms.
 
 use syntax::attr::AttrMetaMethods;
+use syntax::codemap::{DUMMY_SP};
 
 use rustc::ty::TyCtxt;
 use rustc::mir::repr::{self, Mir};
@@ -22,7 +23,7 @@ use std::usize;
 
 use super::MirBorrowckCtxtPreDataflow;
 use super::gather_moves::{Location, MoveData, MovePathData, MovePathIndex, MoveOutIndex, PathMap};
-use super::gather_moves::{MoveOut, MovePath};
+use super::gather_moves::{MoveOut, MovePath, MovePathContent};
 
 use bitslice::BitSlice; // adds set_bit/get_bit to &[usize] bitvector rep.
 
@@ -849,6 +850,8 @@ impl<'a, 'tcx> BitDenotation for MaybeInitializedLvals<'a, 'tcx> {
                         sets: &mut BlockSets,
                         bb: repr::BasicBlock,
                         (idx, stmt): (usize, &repr::Statement)) {
+        let tcx = ctxt.0;
+        let mir = ctxt.1;
         let move_data = &ctxt.2;
         let move_paths = &move_data.move_paths;
         let loc_map = &move_data.loc_map;
@@ -866,6 +869,17 @@ impl<'a, 'tcx> BitDenotation for MaybeInitializedLvals<'a, 'tcx> {
                stmt, loc, paths);
         let bits_per_block = self.bits_per_block(ctxt);
         for &move_path_index in &paths {
+
+            // first, check if the lvalue's type implements Copy, in
+            // which case uses do not kill it.
+            if let MovePathContent::Lvalue(ref lvalue) = move_data.move_paths[move_path_index].content {
+                let ty = mir.lvalue_ty(tcx, lvalue).to_ty(tcx);
+                let empty_param_env = tcx.empty_parameter_environment();
+                if !ty.moves_by_default(&empty_param_env, DUMMY_SP) {
+                    continue;
+                }
+            }
+
             // (don't use zero_to_one since bit may already be set to 1.)
             sets.kill_set.set_bit(move_path_index.idx());
             on_all_children_bits(sets.kill_set,
