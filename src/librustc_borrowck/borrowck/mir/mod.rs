@@ -20,8 +20,10 @@ use rustc::hir::intravisit::{FnKind};
 
 use rustc::mir::repr::{BasicBlock, BasicBlockData, Mir, Statement, Terminator};
 use rustc::session::Session;
+use rustc::ty::TyCtxt;
 
 mod abs_domain;
+pub mod elaborate_drops;
 mod dataflow;
 mod gather_moves;
 // mod graphviz;
@@ -75,12 +77,13 @@ pub fn borrowck_mir<'a, 'tcx: 'a>(
     }
 
     let tcx = bcx.tcx;
+
     let move_data = MoveData::gather_moves(mir, tcx);
     let ctxt = (tcx, mir, move_data);
     let ((_, _, move_data), flow_inits) =
-        do_dataflow(bcx, mir, id, attributes, ctxt, MaybeInitializedLvals::default());
+        do_dataflow(tcx, mir, id, attributes, ctxt, MaybeInitializedLvals::default());
     let (move_data, flow_uninits) =
-        do_dataflow(bcx, mir, id, attributes, move_data, MaybeUninitializedLvals::default());
+        do_dataflow(tcx, mir, id, attributes, move_data, MaybeUninitializedLvals::default());
 
     let move_data = if has_rustc_mir_with(attributes, "dataflow_info_maybe_init").is_some() {
         let ctxt = (tcx, mir, move_data);
@@ -110,57 +113,52 @@ pub fn borrowck_mir<'a, 'tcx: 'a>(
     }
 
     debug!("borrowck_mir done");
-
-    fn do_dataflow<'a, 'tcx, BD>(bcx: &mut BorrowckCtxt<'a, 'tcx>,
-                                 mir: &'a Mir<'tcx>,
-                                 node_id: ast::NodeId,
-                                 attributes: &[ast::Attribute],
-                                 ctxt: BD::Ctxt,
-                                 bd: BD) -> (BD::Ctxt, DataflowResults<BD>)
-        where BD: BitDenotation, BD::Bit: Debug, BD::Ctxt: HasMoveData<'tcx>
-    {
-        use syntax::attr::AttrMetaMethods;
-
-        let name_found = |sess: &Session, attrs: &[ast::Attribute], name| -> Option<String> {
-            if let Some(item) = has_rustc_mir_with(attrs, name) {
-                if let Some(s) = item.value_str() {
-                    return Some(s.to_string())
-                } else {
-                    sess.span_err(
-                        item.span,
-                        &format!("{} attribute requires a path", item.name()));
-                    return None;
-                }
-            }
-            return None;
-        };
-
-        let tcx = bcx.tcx;
-
-        let print_preflow_to =
-            name_found(tcx.sess, attributes, "borrowck_graphviz_preflow");
-        let print_postflow_to =
-            name_found(tcx.sess, attributes, "borrowck_graphviz_postflow");
-
-        let mut mbcx = MirBorrowckCtxtPreDataflow {
-            bcx: bcx,
-            mir: mir,
-            node_id: node_id,
-            print_preflow_to: print_preflow_to,
-            print_postflow_to: print_postflow_to,
-            flow_state: DataflowAnalysis::new(tcx, mir, ctxt, bd),
-        };
-
-        mbcx.dataflow();
-        mbcx.flow_state.results()
-    }
 }
 
-pub struct MirBorrowckCtxtPreDataflow<'b, 'a: 'b, 'tcx: 'a, BD>
+fn do_dataflow<'a, 'tcx, BD>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
+                             mir: &Mir<'tcx>,
+                             node_id: ast::NodeId,
+                             attributes: &[ast::Attribute],
+                             ctxt: BD::Ctxt,
+                             bd: BD) -> (BD::Ctxt, DataflowResults<BD>)
+    where BD: BitDenotation, BD::Bit: Debug, BD::Ctxt: HasMoveData<'tcx>
+{
+    use syntax::attr::AttrMetaMethods;
+
+    let name_found = |sess: &Session, attrs: &[ast::Attribute], name| -> Option<String> {
+        if let Some(item) = has_rustc_mir_with(attrs, name) {
+            if let Some(s) = item.value_str() {
+                return Some(s.to_string())
+            } else {
+                sess.span_err(
+                    item.span,
+                    &format!("{} attribute requires a path", item.name()));
+                return None;
+            }
+        }
+        return None;
+    };
+
+    let print_preflow_to =
+        name_found(tcx.sess, attributes, "borrowck_graphviz_preflow");
+    let print_postflow_to =
+        name_found(tcx.sess, attributes, "borrowck_graphviz_postflow");
+
+    let mut mbcx = MirBorrowckCtxtPreDataflow {
+        node_id: node_id,
+        print_preflow_to: print_preflow_to,
+        print_postflow_to: print_postflow_to,
+        flow_state: DataflowAnalysis::new(tcx, mir, ctxt, bd),
+    };
+
+    mbcx.dataflow();
+    mbcx.flow_state.results()
+}
+
+
+pub struct MirBorrowckCtxtPreDataflow<'a, 'tcx: 'a, BD>
     where BD: BitDenotation, BD::Ctxt: HasMoveData<'tcx>
 {
-    bcx: &'b mut BorrowckCtxt<'a, 'tcx>,
-    mir: &'b Mir<'tcx>,
     node_id: ast::NodeId,
     flow_state: DataflowAnalysis<'a, 'tcx, BD>,
     print_preflow_to: Option<String>,

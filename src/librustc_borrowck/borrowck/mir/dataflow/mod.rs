@@ -36,7 +36,7 @@ pub trait Dataflow {
     fn dataflow(&mut self);
 }
 
-impl<'b, 'a: 'b, 'tcx: 'a, BD> Dataflow for MirBorrowckCtxtPreDataflow<'b, 'a, 'tcx, BD>
+impl<'a, 'tcx: 'a, BD> Dataflow for MirBorrowckCtxtPreDataflow<'a, 'tcx, BD>
     where BD: BitDenotation, BD::Bit: Debug, BD::Ctxt: HasMoveData<'tcx>
 {
     fn dataflow(&mut self) {
@@ -156,7 +156,7 @@ impl<'b, 'a: 'b, 'tcx: 'a, BD> PropagationContext<'b, 'a, 'tcx, BD>
     }
 }
 
-impl<'b, 'a: 'b, 'tcx: 'a, BD> MirBorrowckCtxtPreDataflow<'b, 'a, 'tcx, BD>
+impl<'a, 'tcx: 'a, BD> MirBorrowckCtxtPreDataflow<'a, 'tcx, BD>
     where BD: BitDenotation, BD::Bit: Debug, BD::Ctxt: HasMoveData<'tcx>
 {
     fn path(context: &str, prepost: &str, path: &str) -> PathBuf {
@@ -227,6 +227,9 @@ impl<'a, 'tcx: 'a, O> DataflowAnalysis<'a, 'tcx, O>
     pub fn results(self) -> (O::Ctxt, DataflowResults<O>) {
         (self.ctxt, DataflowResults(self.flow_state))
     }
+
+    pub fn tcx(&self) -> TyCtxt<'a, 'tcx, 'tcx> { self.tcx }
+    pub fn mir(&self) -> &'a Mir<'tcx> { self.mir }
 }
 
 #[derive(Debug)]

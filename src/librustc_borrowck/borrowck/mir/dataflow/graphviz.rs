@@ -38,12 +38,12 @@ pub trait MirWithFlowState<'tcx> {
     fn flow_state(&self) -> &DataflowState<Self::BD>;
 }
 
-impl<'b, 'a: 'b, 'tcx: 'a, BD> MirWithFlowState<'tcx> for MirBorrowckCtxtPreDataflow<'b, 'a, 'tcx, BD>
-    where 'a: 'b, 'tcx: 'a, BD: BitDenotation, BD::Ctxt: HasMoveData<'tcx>
+impl<'a, 'tcx: 'a, BD> MirWithFlowState<'tcx> for MirBorrowckCtxtPreDataflow<'a, 'tcx, BD>
+    where 'a, 'tcx: 'a, BD: BitDenotation, BD::Ctxt: HasMoveData<'tcx>
 {
     type BD = BD;
     fn node_id(&self) -> NodeId { self.node_id }
-    fn mir(&self) -> &Mir<'tcx> { self.mir }
+    fn mir(&self) -> &Mir<'tcx> { self.flow_state.mir() }
     fn analysis_ctxt(&self) -> &BD::Ctxt { &self.flow_state.ctxt }
     fn flow_state(&self) -> &DataflowState<Self::BD> { &self.flow_state.flow_state }
 }
@@ -54,8 +54,8 @@ struct Graph<'a, 'tcx, MWF:'a> where MWF: MirWithFlowState<'tcx>,
     phantom: PhantomData<&'tcx ()>
 }
 
-pub fn print_borrowck_graph_to<'b, 'a, 'tcx, BD>(
-    mbcx: &MirBorrowckCtxtPreDataflow<'b, 'a, 'tcx, BD>,
+pub fn print_borrowck_graph_to<'a, 'tcx, BD>(
+    mbcx: &MirBorrowckCtxtPreDataflow<'a, 'tcx, BD>,
     path: &Path) -> io::Result<()> where BD: BitDenotation,
                                         BD::Bit: Debug, BD::Ctxt: HasMoveData<'tcx>
 {

@@ -17,6 +17,7 @@ pub use self::LoanPathElem::*;
 pub use self::bckerr_code::*;
 pub use self::AliasableViolationKind::*;
 pub use self::MovedValueUseKind::*;
+pub use self::mir::elaborate_drops::ElaborateDrops;
 
 use self::InteriorKind::*;
 
