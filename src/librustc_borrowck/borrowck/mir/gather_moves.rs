@@ -32,7 +32,7 @@ mod indexes {
 
     macro_rules! new_index {
         ($Index:ident) => {
-            #[derive(Copy, Clone, PartialEq, Eq, Debug)]
+            #[derive(Copy, Clone, PartialEq, Eq, Debug, Hash)]
             pub struct $Index(NonZero<usize>);
 
             impl $Index {
@@ -196,7 +196,7 @@ impl fmt::Debug for MoveOut {
     }
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Location {
     /// block where action is located
     pub block: BasicBlock,

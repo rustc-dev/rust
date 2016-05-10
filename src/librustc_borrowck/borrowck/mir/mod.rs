@@ -12,12 +12,13 @@ use borrowck::BorrowckCtxt;
 
 use syntax::ast::{self, MetaItem};
 use syntax::attr::AttrMetaMethods;
-use syntax::codemap::Span;
+use syntax::codemap::{Span, DUMMY_SP};
 use syntax::ptr::P;
 
 use rustc::hir;
 use rustc::hir::intravisit::{FnKind};
 
+use rustc::mir::repr;
 use rustc::mir::repr::{BasicBlock, BasicBlockData, Mir, Statement, Terminator};
 use rustc::session::Session;
 use rustc::ty::TyCtxt;
@@ -32,7 +33,8 @@ use self::dataflow::{BitDenotation};
 use self::dataflow::{Dataflow, DataflowAnalysis, DataflowResults};
 use self::dataflow::{HasMoveData};
 use self::dataflow::{MaybeInitializedLvals, MaybeUninitializedLvals};
-use self::gather_moves::{MoveData};
+use self::gather_moves::{MoveData, MovePathIndex, Location};
+use self::gather_moves::{MovePathData, MovePathContent};
 
 use std::fmt::Debug;
 
@@ -40,7 +42,7 @@ use std::fmt::Debug;
 pub struct BorrowckMirData<'a, 'tcx: 'a> {
     pub move_data: MoveData<'tcx>,
     pub flow_inits: DataflowResults<MaybeInitializedLvals<'a, 'tcx>>,
-    pub flow_uninits: DataflowResults<MaybeUninitializedLvals<'tcx>>,
+    pub flow_uninits: DataflowResults<MaybeUninitializedLvals<'a, 'tcx>>,
 }
 
 fn has_rustc_mir_with(attrs: &[ast::Attribute], name: &str) -> Option<P<MetaItem>> {
@@ -82,10 +84,11 @@ pub fn borrowck_mir<'a, 'tcx: 'a>(
     let ctxt = (tcx, mir, move_data);
     let ((_, _, move_data), flow_inits) =
         do_dataflow(tcx, mir, id, attributes, ctxt, MaybeInitializedLvals::default());
-    let (move_data, flow_uninits) =
-        do_dataflow(tcx, mir, id, attributes, move_data, MaybeUninitializedLvals::default());
+    let ctxt = (tcx, mir, move_data);
+    let ((_, _, move_data), flow_uninits) =
+        do_dataflow(tcx, mir, id, attributes, ctxt, MaybeUninitializedLvals::default());
 
-    let move_data = if has_rustc_mir_with(attributes, "dataflow_info_maybe_init").is_some() {
+    let mut move_data = if has_rustc_mir_with(attributes, "dataflow_info_maybe_init").is_some() {
         let ctxt = (tcx, mir, move_data);
         dataflow::issue_result_info(tcx.sess, mir, &ctxt, &flow_inits);
         ctxt.2
@@ -93,10 +96,12 @@ pub fn borrowck_mir<'a, 'tcx: 'a>(
         move_data
     };
     if has_rustc_mir_with(attributes, "dataflow_info_maybe_uninit").is_some() {
+        let ctxt = (tcx, mir, move_data);
         dataflow::issue_result_info(tcx.sess,
                                     mir,
-                                    &move_data,
+                                    &ctxt,
                                     &flow_uninits);
+        move_data = ctxt.2;
     }
 
     let mut mbcx = MirBorrowckCtxt {
@@ -171,7 +176,7 @@ pub struct MirBorrowckCtxt<'b, 'a: 'b, 'tcx: 'a> {
     node_id: ast::NodeId,
     move_data: MoveData<'tcx>,
     flow_inits: DataflowResults<MaybeInitializedLvals<'a, 'tcx>>,
-    flow_uninits: DataflowResults<MaybeUninitializedLvals<'tcx>>
+    flow_uninits: DataflowResults<MaybeUninitializedLvals<'a, 'tcx>>
 }
 
 impl<'b, 'a: 'b, 'tcx: 'a> MirBorrowckCtxt<'b, 'a, 'tcx> {
@@ -191,5 +196,97 @@ impl<'b, 'a: 'b, 'tcx: 'a> MirBorrowckCtxt<'b, 'a, 'tcx> {
 
     fn process_terminator(&mut self, bb: BasicBlock, term: &Option<Terminator<'tcx>>) {
         debug!("MirBorrowckCtxt::process_terminator({:?}, {:?})", bb, term);
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum DropFlagState {
+    Live,
+    Dead
+}
+
+fn on_all_children_bits<F>(move_paths: &MovePathData,
+                           move_path_index: MovePathIndex,
+                           mut each_child: F)
+    where F: FnMut(MovePathIndex)
+{
+    fn on_all_children_bits<F>(move_paths: &MovePathData,
+                               move_path_index: MovePathIndex,
+                               mut each_child: &mut F)
+        where F: FnMut(MovePathIndex)
+    {
+        each_child(move_path_index);
+
+        let mut next_child_index = move_paths[move_path_index].first_child;
+        while let Some(child_index) = next_child_index {
+            on_all_children_bits(move_paths, child_index, each_child);
+            next_child_index = move_paths[child_index].next_sibling;
+        }
+    }
+    on_all_children_bits(move_paths, move_path_index, &mut each_child);
+}
+
+fn drop_flag_effects_for_function_entry<'a, 'tcx, F>(
+    tcx: TyCtxt<'a, 'tcx, 'tcx>,
+    mir: &Mir<'tcx>,
+    move_data: &MoveData<'tcx>,
+    mut callback: F)
+    where F: FnMut(MovePathIndex, DropFlagState)
+{
+    let move_paths = &move_data.move_paths;
+
+    for i in 0..(mir.arg_decls.len() as u32) {
+        let lvalue = repr::Lvalue::Arg(i);
+        let move_path_index = move_data.rev_lookup.find(&lvalue);
+        on_all_children_bits(move_paths,
+                             move_path_index,
+                             |moi| callback(moi, DropFlagState::Live));
+    }
+}
+
+fn drop_flag_effects_for_location<'a, 'tcx, F>(
+    tcx: TyCtxt<'a, 'tcx, 'tcx>,
+    mir: &Mir<'tcx>,
+    move_data: &MoveData<'tcx>,
+    loc: Location,
+    mut callback: F)
+    where F: FnMut(MovePathIndex, DropFlagState)
+{
+    debug!("drop_flag_effects_for_location({:?})", loc);
+
+    // first, move out of the RHS
+    for mi in &move_data.loc_map[loc] {
+        let path = mi.move_path_index(move_data);
+        debug!("moving out of path {:?}", move_data.move_paths[path]);
+
+        // don't move out of non-Copy things
+        if let MovePathContent::Lvalue(ref lvalue) = move_data.move_paths[path].content {
+            let ty = mir.lvalue_ty(tcx, lvalue).to_ty(tcx);
+            let empty_param_env = tcx.empty_parameter_environment();
+            if !ty.moves_by_default(&empty_param_env, DUMMY_SP) {
+                continue;
+            }
+        }
+
+        on_all_children_bits(&move_data.move_paths,
+                             path,
+                             |moi| callback(moi, DropFlagState::Dead))
+    }
+
+    let bb = mir.basic_block_data(loc.block);
+    match bb.statements.get(loc.index) {
+        Some(stmt) => match stmt.kind {
+            repr::StatementKind::Assign(ref lvalue, _) => {
+                debug!("applying assignment {:?}", stmt);
+                on_all_children_bits(&move_data.move_paths,
+                                     move_data.rev_lookup.find(lvalue),
+                                     |moi| callback(moi, DropFlagState::Live))
+            }
+        },
+        None => {
+            // terminator - no move-ins except for function return edge
+            let term = bb.terminator();
+            debug!("applying terminator {:?}", term);
+        }
     }
 }

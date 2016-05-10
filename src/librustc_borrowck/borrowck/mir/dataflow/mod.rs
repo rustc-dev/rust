@@ -24,6 +24,7 @@ use std::usize;
 use super::MirBorrowckCtxtPreDataflow;
 use super::gather_moves::{Location, MoveData, MovePathData, MovePathIndex, MoveOutIndex, PathMap};
 use super::gather_moves::{MoveOut, MovePath, MovePathContent};
+use super::DropFlagState;
 
 use bitslice::BitSlice; // adds set_bit/get_bit to &[usize] bitvector rep.
 
@@ -81,7 +82,7 @@ impl<'a, 'tcx: 'a, BD> DataflowAnalysis<'a, 'tcx, BD>
 
         {
             let sets = &mut self.flow_state.sets.for_block(repr::START_BLOCK.index());
-            self.flow_state.operator.start_block_effect(self.tcx, &self.ctxt, self.mir, sets);
+            self.flow_state.operator.start_block_effect(&self.ctxt, sets);
         }
 
         for bb in self.mir.all_basic_blocks() {
@@ -91,13 +92,13 @@ impl<'a, 'tcx: 'a, BD> DataflowAnalysis<'a, 'tcx, BD>
                 self.mir.basic_block_data(bb);
 
             let sets = &mut self.flow_state.sets.for_block(bb.index());
-            for j_stmt in statements.iter().enumerate() {
-                self.flow_state.operator.statement_effect(self.tcx, &self.ctxt, sets, bb, j_stmt);
+            for j_stmt in 0..statements.len() {
+                self.flow_state.operator.statement_effect(&self.ctxt, sets, bb, j_stmt);
             }
 
             if let Some(ref term) = *terminator {
                 let stmts_len = statements.len();
-                self.flow_state.operator.terminator_effect(self.tcx, &self.ctxt, sets, bb, (stmts_len, term));
+                self.flow_state.operator.terminator_effect(&self.ctxt, sets, bb, stmts_len);
             }
         }
     }
@@ -309,9 +310,7 @@ impl AllSets {
         self.lookup_set_for(&self.on_entry_sets, block_idx)
     }
     pub fn on_exit_set_for(&self, block_idx: usize) -> Vec<usize> {
-        let mut set: Vec<_> = self.on_entry_set_for(block_idx).iter()
-            .map(|x|*x)
-            .collect();
+        let mut set: Vec<_> = self.on_entry_set_for(block_idx).to_owned();
         bitwise(&mut set[..], self.gen_set_for(block_idx), &Union);
         bitwise(&mut set[..], self.kill_set_for(block_idx), &Subtract);
         return set;
@@ -319,6 +318,13 @@ impl AllSets {
 }
 
 impl<O: BitDenotation> DataflowState<O> {
+    pub fn set_at_location(&self, ctxt: &O::Ctxt, location: Location) -> Vec<usize> {
+        let Location { block, index } = location;
+        let mut set: Vec<_> = self.sets.on_entry_set_for(block.index()).to_owned();
+        let mut kill_set = 0;
+        unimplemented!()
+    }
+
     fn each_bit<F>(&self, ctxt: &O::Ctxt, words: &[usize], mut f: F)
         where F: FnMut(usize) {
         //! Helper for iterating over the bits in a bitvector.
@@ -403,11 +409,7 @@ pub trait BitDenotation: DataflowOperator {
     /// (Typically this should only modify `sets.on_entry`, since the
     /// gen and kill sets should reflect the effects of *executing*
     /// the start block itself.)
-    fn start_block_effect(&self,
-                          _tcx: TyCtxt,
-                          ctxt: &Self::Ctxt,
-                          mir: &Mir,
-                          sets: &mut BlockSets);
+    fn start_block_effect(&self, ctxt: &Self::Ctxt, sets: &mut BlockSets);
 
     /// Mutates the block-sets (the flow sets for the given
     /// basic block) according to the effects of evaluating statement.
@@ -420,11 +422,10 @@ pub trait BitDenotation: DataflowOperator {
     /// an identifying index: namely, the index of the statement
     /// in the basic block.
     fn statement_effect(&self,
-                        _tcx: TyCtxt,
                         ctxt: &Self::Ctxt,
                         sets: &mut BlockSets,
                         bb: repr::BasicBlock,
-                        idx_stmt: (usize, &repr::Statement));
+                        idx_stmt: usize);
 
     /// Mutates the block-sets (the flow sets for the given
     /// basic block) according to the effects of evaluating
@@ -441,11 +442,10 @@ pub trait BitDenotation: DataflowOperator {
     /// The effects applied here cannot depend on which branch the
     /// terminator took.
     fn terminator_effect(&self,
-                         _tcx: TyCtxt,
                          ctxt: &Self::Ctxt,
                          sets: &mut BlockSets,
                          bb: repr::BasicBlock,
-                         idx_term: (usize, &repr::Terminator));
+                         idx_term: usize);
 
     /// Mutates the block-sets according to the (flow-dependent)
     /// effect of a successful return from a Call terminator.
@@ -674,9 +674,9 @@ pub struct MaybeInitializedLvals<'a, 'tcx: 'a> {
 /// between this data and `MaybeInitializedLvals` yields the set of
 /// l-values that would require a dynamic drop-flag at that statement.
 #[derive(Debug, Default)]
-pub struct MaybeUninitializedLvals<'tcx> {
+pub struct MaybeUninitializedLvals<'a, 'tcx: 'a> {
     // See "Note on PhantomData" above.
-    phantom: PhantomData<for <'a> Fn(&'a MoveData<'tcx>)>,
+    phantom: PhantomData<Fn(&'a MoveData<'tcx>, &'a TyCtxt<'tcx>, &'a Mir<'tcx>)>
 }
 
 /// `MovingOutStatements` tracks the statements that perform moves out
@@ -693,35 +693,32 @@ pub struct MaybeUninitializedLvals<'tcx> {
 /// data of *which* particular statement causing the deinitialization
 /// that the borrow checker's error meessage may need to report.
 #[derive(Debug, Default)]
-pub struct MovingOutStatements<'tcx> {
+pub struct MovingOutStatements<'a, 'tcx: 'a> {
     // See "Note on PhantomData" above.
-    phantom: PhantomData<for <'a> Fn(&'a MoveData<'tcx>)>,
+    phantom: PhantomData<Fn(&'a MoveData<'tcx>, &'a TyCtxt<'tcx>, &'a Mir<'tcx>)>
 }
 
-impl<'tcx> BitDenotation for MovingOutStatements<'tcx> {
+impl<'a, 'tcx> BitDenotation for MovingOutStatements<'a, 'tcx> {
     type Bit = MoveOut;
-    type Ctxt = MoveData<'tcx>;
+    type Ctxt = (&'a TyCtxt<'tcx>, &'a Mir<'tcx>, MoveData<'tcx>);
     fn name() -> &'static str { "moving_out" }
-    fn bits_per_block(&self, ctxt: &MoveData<'tcx>) -> usize {
-        ctxt.moves.len()
+    fn bits_per_block(&self, ctxt: &Self::Ctxt) -> usize {
+        ctxt.2.moves.len()
     }
-    fn interpret<'c>(&self, ctxt: &'c MoveData<'tcx>, idx: usize) -> &'c Self::Bit {
-        &ctxt.moves[idx]
+    fn interpret<'c>(&self, ctxt: &'c Self::Ctxt, idx: usize) -> &'c Self::Bit {
+        &ctxt.2.moves[idx]
     }
-    fn start_block_effect(&self,
-                          _tcx: TyCtxt,
-                          _move_data: &Self::Ctxt,
-                          _mir: &Mir,
-                          _sets: &mut BlockSets) {
+    fn start_block_effect(&self,_move_data: &Self::Ctxt, _sets: &mut BlockSets) {
         // no move-statements have been executed prior to function
         // execution, so this method has no effect on `_sets`.
     }
     fn statement_effect(&self,
-                        _tcx: TyCtxt,
-                        move_data: &Self::Ctxt,
+                        ctxt: &Self::Ctxt,
                         sets: &mut BlockSets,
                         bb: repr::BasicBlock,
-                        (idx, stmt): (usize, &repr::Statement)) {
+                        idx: usize) {
+        let &(_tcx, mir, ref move_data) = ctxt;
+        let stmt = &mir.basic_block_data(bb).statements[idx];
         let move_paths = &move_data.move_paths;
         let loc_map = &move_data.loc_map;
         let path_map = &move_data.path_map;
@@ -736,7 +733,7 @@ impl<'tcx> BitDenotation for MovingOutStatements<'tcx> {
             // here, in dataflow vector
             zero_to_one(&mut sets.gen_set, *move_index);
         }
-        let bits_per_block = self.bits_per_block(move_data);
+        let bits_per_block = self.bits_per_block(ctxt);
         match stmt.kind {
             repr::StatementKind::Assign(ref lvalue, _) => {
                 // assigning into this `lvalue` kills all
@@ -758,11 +755,13 @@ impl<'tcx> BitDenotation for MovingOutStatements<'tcx> {
     }
 
     fn terminator_effect(&self,
-                         tcx: TyCtxt,
-                         move_data: &Self::Ctxt,
+                         ctxt: &Self::Ctxt,
                          sets: &mut BlockSets,
                          bb: repr::BasicBlock,
-                         (statements_len, term): (usize, &repr::Terminator)) {
+                         statements_len: usize)
+    {
+        let &(tcx, mir, ref move_data) = ctxt;
+        let term = mir.basic_block_data(bb).terminator.as_ref().unwrap();
         let move_paths = &move_data.move_paths;
         let loc_map = &move_data.loc_map;
         let path_map = &move_data.path_map;
@@ -770,7 +769,7 @@ impl<'tcx> BitDenotation for MovingOutStatements<'tcx> {
         let loc = Location { block: bb, index: statements_len };
         debug!("terminator {:?} at loc {:?} moves out of move_indexes {:?}",
                term, loc, &loc_map[loc]);
-        let bits_per_block = self.bits_per_block(move_data);
+        let bits_per_block = self.bits_per_block(ctxt);
         for move_index in &loc_map[loc] {
             assert!(move_index.idx() < bits_per_block);
             zero_to_one(&mut sets.gen_set, *move_index);
@@ -779,13 +778,14 @@ impl<'tcx> BitDenotation for MovingOutStatements<'tcx> {
 
     fn propagate_call_return(&self,
                              tcx: TyCtxt,
-                             move_data: &Self::Ctxt,
+                             ctxt: &Self::Ctxt,
                              in_out: &mut [usize],
                              call_bb: repr::BasicBlock,
                              dest_bb: repr::BasicBlock,
                              dest_lval: &repr::Lvalue) {
+        let move_data = &ctxt.2;
         let move_path_index = move_data.rev_lookup.find(dest_lval);
-        let bits_per_block = self.bits_per_block(move_data);
+        let bits_per_block = self.bits_per_block(ctxt);
 
         in_out.clear_bit(move_path_index.idx());
         on_all_children_bits(in_out,
@@ -796,6 +796,40 @@ impl<'tcx> BitDenotation for MovingOutStatements<'tcx> {
                                  assert!(mpi.idx() < bits_per_block);
                                  in_out.clear_bit(mpi.idx());
                              });
+    }
+}
+
+impl<'a, 'tcx> MaybeInitializedLvals<'a, 'tcx> {
+    fn update_bits(sets: &mut BlockSets, path: MovePathIndex,
+                   state: super::DropFlagState)
+    {
+        match state {
+            DropFlagState::Dead => {
+                sets.gen_set.set_bit(path.idx());
+                sets.kill_set.clear_bit(path.idx());
+            }
+            DropFlagState::Live => {
+                sets.kill_set.set_bit(path.idx());
+                sets.gen_set.clear_bit(path.idx());
+            }
+        }
+    }
+}
+
+impl<'a, 'tcx> MaybeUninitializedLvals<'a, 'tcx> {
+    fn update_bits(sets: &mut BlockSets, path: MovePathIndex,
+                   state: super::DropFlagState)
+    {
+        match state {
+            DropFlagState::Live => {
+                sets.gen_set.set_bit(path.idx());
+                sets.kill_set.clear_bit(path.idx());
+            }
+            DropFlagState::Dead => {
+                sets.kill_set.set_bit(path.idx());
+                sets.gen_set.clear_bit(path.idx());
+            }
+        }
     }
 }
 
@@ -810,161 +844,40 @@ impl<'a, 'tcx> BitDenotation for MaybeInitializedLvals<'a, 'tcx> {
         &ctxt.2.move_paths[MovePathIndex::new(idx)]
     }
 
-    // sets on_entry bits for Arg lvalues
-    fn start_block_effect(&self,
-                          tcx: TyCtxt,
-                          ctxt: &Self::Ctxt,
-                          mir: &Mir,
-                          sets: &mut BlockSets) {
-        let move_data = &ctxt.2;
-        let bits_per_block = self.bits_per_block(ctxt);
-
-        on_all_children_of_arg_lvalues(
-            move_data, mir, sets, &|on_entry, moi| {
-                let mpi = moi.move_path_index(move_data);
-                assert!(mpi.idx() < bits_per_block);
-                on_entry.set_bit(mpi.idx());
+    fn start_block_effect(&self, ctxt: &Self::Ctxt, sets: &mut BlockSets)
+    {
+        super::drop_flag_effects_for_function_entry(
+            ctxt.0, ctxt.1, &ctxt.2,
+            |path, s| {
+                assert!(s == DropFlagState::Live);
+                sets.on_entry.set_bit(path.idx());
             });
-
-        // let move_paths = &move_data.move_paths;
-        // let path_map = &move_data.path_map;
-        // let rev_lookup = &move_data.rev_lookup;
-        //
-        // for i in 0..(mir.arg_decls.len() as u32) {
-        //     let lvalue = repr::Lvalue::Arg(i);
-        //     let move_path_index = rev_lookup.find(&lvalue);
-        //     on_all_children_bits(sets.on_entry,
-        //                          path_map,
-        //                          move_paths,
-        //                          move_path_index,
-        //                          &|on_entry, moi| {
-        //                              let mpi = moi.move_path_index(move_data);
-        //                              assert!(mpi.idx() < bits_per_block);
-        //                              on_entry.set_bit(mpi.idx());
-        //                          });
-        // }
     }
 
-    // gens bits for lvalues initialized by statement
-    // kills bits for lvalues moved-out by statement
     fn statement_effect(&self,
-                        tcx: TyCtxt,
                         ctxt: &Self::Ctxt,
                         sets: &mut BlockSets,
                         bb: repr::BasicBlock,
-                        (idx, stmt): (usize, &repr::Statement)) {
-        let tcx = ctxt.0;
-        let mir = ctxt.1;
-        let move_data = &ctxt.2;
-        let move_paths = &move_data.move_paths;
-        let loc_map = &move_data.loc_map;
-        let path_map = &move_data.path_map;
-        let rev_lookup = &move_data.rev_lookup;
-
-        let loc = Location { block: bb, index: idx };
-        let move_outs = &loc_map[loc];
-
-        // first, setup kill_set: kill bits for l-values moved out by
-        // stmt (`path` intermediate vec is unecessary, but arguably
-        // result debug! printout better reflects method's effects).
-        let paths = move_outs_paths(move_data, &move_outs[..]);
-        debug!("stmt {:?} at loc {:?} moves out of paths {:?}",
-               stmt, loc, paths);
-        let bits_per_block = self.bits_per_block(ctxt);
-        for &move_path_index in &paths {
-
-            // first, check if the lvalue's type implements Copy, in
-            // which case uses do not kill it.
-            if let MovePathContent::Lvalue(ref lvalue) = move_data.move_paths[move_path_index].content {
-                let ty = mir.lvalue_ty(tcx, lvalue).to_ty(tcx);
-                let empty_param_env = tcx.empty_parameter_environment();
-                if !ty.moves_by_default(tcx, &empty_param_env, DUMMY_SP) {
-                    continue;
-                }
-            }
-
-            // (don't use zero_to_one since bit may already be set to 1.)
-            sets.kill_set.set_bit(move_path_index.idx());
-            on_all_children_bits(sets.kill_set,
-                                 path_map,
-                                 move_paths,
-                                 move_path_index,
-                                 &|kill_set, moi| {
-                                     let mpi = moi.move_path_index(move_data);
-                                     if mpi.idx() >= bits_per_block {
-                                         debug!("child bit {} is out of range {}",
-                                                mpi.idx(), bits_per_block);
-                                     }
-                                     assert!(mpi.idx() < bits_per_block);
-                                     kill_set.set_bit(mpi.idx());
-                                 });
-        }
-
-        // second, the gen_set: initialized l-values are generated,
-        // and removed from kill_set (because dataflow will first
-        // apply gen_set effects, followed by the kill_set effects).
-        match stmt.kind {
-            repr::StatementKind::Assign(ref lvalue, _) => {
-                // assigning into `lvalue` gens a bit for it and *also*
-                // all lvalues for children and associated fragment sets.
-                //
-                // also clear the corresponding bit in the kill set, if any
-                let move_path_index = rev_lookup.find(lvalue);
-
-                sets.gen_set.set_bit(move_path_index.idx());
-                on_all_children_bits(sets.gen_set,
-                                     path_map,
-                                     move_paths,
-                                     move_path_index,
-                                     &|gen_set, moi| {
-                                         let mpi = moi.move_path_index(move_data);
-                                         assert!(mpi.idx() < bits_per_block);
-                                         gen_set.set_bit(mpi.idx());
-                                     });
-
-                sets.kill_set.clear_bit(move_path_index.idx());
-                on_all_children_bits(sets.kill_set,
-                                     path_map,
-                                     move_paths,
-                                     move_path_index,
-                                     &|kill_set, moi| {
-                                         let mpi = moi.move_path_index(move_data);
-                                         assert!(mpi.idx() < bits_per_block);
-                                         kill_set.clear_bit(mpi.idx());
-                                     });
-            }
-        }
+                        idx: usize)
+    {
+        super::drop_flag_effects_for_location(
+            ctxt.0, ctxt.1, &ctxt.2,
+            Location { block: bb, index: idx },
+            |path, s| Self::update_bits(sets, path, s)
+        )
     }
 
     fn terminator_effect(&self,
-                         tcx: TyCtxt,
                          ctxt: &Self::Ctxt,
                          sets: &mut BlockSets,
                          bb: repr::BasicBlock,
-                         (statements_len, term): (usize, &repr::Terminator)) {
-        let move_data = &ctxt.2;
-        let move_paths = &move_data.move_paths;
-        let loc_map = &move_data.loc_map;
-        let path_map = &move_data.path_map;
-        let rev_lookup = &move_data.rev_lookup;
-        let loc = Location { block: bb, index: statements_len };
-        let paths = move_outs_paths(move_data, &loc_map[loc]);
-        debug!("terminator {:?} at loc {:?} moves out of paths {:?}",
-               term, loc, &paths);
-        let bits_per_block = self.bits_per_block(ctxt);
-        for &move_path_index in &paths {
-            // (don't use zero_to_one since bit may already be set to 1.)
-            sets.kill_set.set_bit(move_path_index.idx());
-            on_all_children_bits(sets.kill_set,
-                                 path_map,
-                                 move_paths,
-                                 move_path_index,
-                                 &|kill_set, moi| {
-                                     let mpi = moi.move_path_index(move_data);
-                                     assert!(mpi.idx() < bits_per_block);
-                                     kill_set.set_bit(mpi.idx());
-                                 });
-        }
+                         statements_len: usize)
+    {
+        super::drop_flag_effects_for_location(
+            ctxt.0, ctxt.1, &ctxt.2,
+            Location { block: bb, index: statements_len },
+            |path, s| Self::update_bits(sets, path, s)
+        )
     }
 
     fn propagate_call_return(&self,
@@ -992,135 +905,65 @@ impl<'a, 'tcx> BitDenotation for MaybeInitializedLvals<'a, 'tcx> {
     }
 }
 
-impl<'tcx> BitDenotation for MaybeUninitializedLvals<'tcx> {
+impl<'a, 'tcx> BitDenotation for MaybeUninitializedLvals<'a, 'tcx> {
     type Bit = MovePath<'tcx>;
-    type Ctxt = MoveData<'tcx>;
+    type Ctxt = (&'a TyCtxt<'tcx>, &'a Mir<'tcx>, MoveData<'tcx>);
     fn name() -> &'static str { "maybe_uninit" }
     fn bits_per_block(&self, ctxt: &Self::Ctxt) -> usize {
-        ctxt.move_paths.len()
+        ctxt.2.move_paths.len()
     }
     fn interpret<'c>(&self, ctxt: &'c Self::Ctxt, idx: usize) -> &'c Self::Bit {
-        &ctxt.move_paths[MovePathIndex::new(idx)]
+        &ctxt.2.move_paths[MovePathIndex::new(idx)]
     }
 
     // sets on_entry bits for Arg lvalues
-    fn start_block_effect(&self,
-                          tcx: TyCtxt,
-                          move_data: &Self::Ctxt,
-                          mir: &Mir,
-                          sets: &mut BlockSets) {
-        let bits_per_block = self.bits_per_block(move_data);
-
-        on_all_children_of_arg_lvalues(
-            move_data, mir, sets, &|on_entry, moi| {
-                let mpi = moi.move_path_index(move_data);
-                assert!(mpi.idx() < bits_per_block);
-                on_entry.clear_bit(mpi.idx());
+    fn start_block_effect(&self, ctxt: &Self::Ctxt, sets: &mut BlockSets) {
+        super::drop_flag_effects_for_function_entry(
+            ctxt.0, ctxt.1, &ctxt.2,
+            |path, s| {
+                assert!(s == DropFlagState::Live);
+                sets.on_entry.clear_bit(path.idx());
             });
     }
 
-    // gens bits for lvalues moved-out by statement
-    // kills bits for lvalues initialized by statement
     fn statement_effect(&self,
-                        tcx: TyCtxt,
-                        move_data: &Self::Ctxt,
+                        ctxt: &Self::Ctxt,
                         sets: &mut BlockSets,
                         bb: repr::BasicBlock,
-                        (idx, stmt): (usize, &repr::Statement)) {
-        let move_paths = &move_data.move_paths;
-        let loc_map = &move_data.loc_map;
-        let path_map = &move_data.path_map;
-        let rev_lookup = &move_data.rev_lookup;
-
-        let loc = Location { block: bb, index: idx };
-        let move_outs = &loc_map[loc];
-
-        // first, setup gen_set: gen bits for l-values moved out by
-        // stmt (`path` intermediate vec is unecessary, but arguably
-        // result debug! printout better reflects method's effects).
-        let paths = move_outs_paths(move_data, &move_outs[..]);
-        debug!("stmt {:?} at loc {:?} moves out of paths {:?}",
-               stmt, loc, paths);
-        let bits_per_block = self.bits_per_block(move_data);
-        for &move_path_index in &paths {
-            // (don't use zero_to_one since bit may already be set to 1.)
-            sets.gen_set.set_bit(move_path_index.idx());
-            on_all_children_bits(sets.gen_set,
-                                 path_map,
-                                 move_paths,
-                                 move_path_index,
-                                 &|gen_set, moi| {
-                                     let mpi = moi.move_path_index(move_data);
-                                     assert!(mpi.idx() < bits_per_block);
-                                     gen_set.set_bit(mpi.idx());
-                                 });
-        }
-
-        // second, the kill_set: kill bits for initialized l-value, if any
-        match stmt.kind {
-            repr::StatementKind::Assign(ref lvalue, _) => {
-                // assigning into `lvalue` gens a bit for it and *also*
-                // all lvalues for children and associated fragment sets.
-                //
-                // also clear the corresponding bit in the kill set, if any
-                let move_path_index = rev_lookup.find(lvalue);
-
-                sets.kill_set.set_bit(move_path_index.idx());
-                on_all_children_bits(sets.kill_set,
-                                     path_map,
-                                     move_paths,
-                                     move_path_index,
-                                     &|kill_set, moi| {
-                                         let mpi = moi.move_path_index(move_data);
-                                         assert!(mpi.idx() < bits_per_block);
-                                         kill_set.set_bit(mpi.idx());
-                                     });
-            }
-        }
+                        idx: usize)
+    {
+        super::drop_flag_effects_for_location(
+            ctxt.0, ctxt.1, &ctxt.2,
+            Location { block: bb, index: idx },
+            |path, s| Self::update_bits(sets, path, s)
+        )
     }
 
     fn terminator_effect(&self,
-                         tcx: TyCtxt,
-                         move_data: &Self::Ctxt,
+                         ctxt: &Self::Ctxt,
                          sets: &mut BlockSets,
                          bb: repr::BasicBlock,
-                         (statements_len, term): (usize, &repr::Terminator)) {
-        let move_paths = &move_data.move_paths;
-        let loc_map = &move_data.loc_map;
-        let path_map = &move_data.path_map;
-        let rev_lookup = &move_data.rev_lookup;
-        let loc = Location { block: bb, index: statements_len };
-        let paths = move_outs_paths(move_data, &loc_map[loc]);
-        debug!("terminator {:?} at loc {:?} moves out of paths {:?}",
-               term, loc, paths);
-        let bits_per_block = self.bits_per_block(move_data);
-        for &move_path_index in &paths[..] {
-            // (don't use zero_to_one since bit may already be set to 1.)
-            sets.kill_set.set_bit(move_path_index.idx());
-            on_all_children_bits(sets.kill_set,
-                                 path_map,
-                                 move_paths,
-                                 move_path_index,
-                                 &|kill_set, moi| {
-                                     let mpi = moi.move_path_index(move_data);
-                                     assert!(mpi.idx() < bits_per_block);
-                                     kill_set.set_bit(mpi.idx());
-                                 });
-        }
+                         statements_len: usize)
+    {
+        super::drop_flag_effects_for_location(
+            ctxt.0, ctxt.1, &ctxt.2,
+            Location { block: bb, index: statements_len },
+            |path, s| Self::update_bits(sets, path, s)
+        )
     }
-
 
     fn propagate_call_return(&self,
                              tcx: TyCtxt,
-                             move_data: &Self::Ctxt,
+                             ctxt: &Self::Ctxt,
                              in_out: &mut [usize],
                              call_bb: repr::BasicBlock,
                              dest_bb: repr::BasicBlock,
                              dest_lval: &repr::Lvalue) {
         // when a call returns successfully, that means we need to
         // clear the bits for that (definitely initialized) dest_lval.
+        let move_data = &ctxt.2;
         let move_path_index = move_data.rev_lookup.find(dest_lval);
-        let bits_per_block = self.bits_per_block(move_data);
+        let bits_per_block = self.bits_per_block(ctxt);
         in_out.clear_bit(move_path_index.idx());
         on_all_children_bits(in_out,
                              &move_data.path_map,
@@ -1146,28 +989,7 @@ fn move_outs_paths(move_data: &MoveData,
         .collect()
 }
 
-fn on_all_children_of_arg_lvalues<Each>(move_data: &MoveData,
-                                        mir: &Mir,
-                                        sets: &mut BlockSets,
-                                        each_child: &Each)
-    where Each: Fn(&mut [usize], MoveOutIndex)
-{
-    let move_paths = &move_data.move_paths;
-    let path_map = &move_data.path_map;
-    let rev_lookup = &move_data.rev_lookup;
-
-    for i in 0..(mir.arg_decls.len() as u32) {
-        let lvalue = repr::Lvalue::Arg(i);
-        let move_path_index = rev_lookup.find(&lvalue);
-        on_all_children_bits(sets.on_entry,
-                             path_map,
-                             move_paths,
-                             move_path_index,
-                             each_child);
-    }
-}
-
-impl<'tcx> BitwiseOperator for MovingOutStatements<'tcx> {
+impl<'a, 'tcx> BitwiseOperator for MovingOutStatements<'a, 'tcx> {
     #[inline]
     fn join(&self, pred1: usize, pred2: usize) -> usize {
         pred1 | pred2 // moves from both preds are in scope
@@ -1181,14 +1003,14 @@ impl<'a, 'tcx> BitwiseOperator for MaybeInitializedLvals<'a, 'tcx> {
     }
 }
 
-impl<'tcx> BitwiseOperator for MaybeUninitializedLvals<'tcx> {
+impl<'a, 'tcx> BitwiseOperator for MaybeUninitializedLvals<'a, 'tcx> {
     #[inline]
     fn join(&self, pred1: usize, pred2: usize) -> usize {
         pred1 | pred2 // "maybe" means we union effects of both preds
     }
 }
 
-impl<'tcx> DataflowOperator for MovingOutStatements<'tcx> {
+impl<'a, 'tcx> DataflowOperator for MovingOutStatements<'a, 'tcx> {
     #[inline]
     fn initial_value() -> bool {
         false // no loans in scope by default
@@ -1202,10 +1024,10 @@ impl<'a, 'tcx> DataflowOperator for MaybeInitializedLvals<'a, 'tcx> {
     }
 }
 
-impl<'tcx> DataflowOperator for MaybeUninitializedLvals<'tcx> {
+impl<'a, 'tcx> DataflowOperator for MaybeUninitializedLvals<'a, 'tcx> {
     #[inline]
     fn initial_value() -> bool {
-        false // lvalues start uninitialized
+        true // lvalues start uninitialized
     }
 }
 
