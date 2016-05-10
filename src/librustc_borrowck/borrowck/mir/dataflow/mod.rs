@@ -218,7 +218,7 @@ pub struct DataflowAnalysis<'a, 'tcx: 'a, O>
     flow_state: DataflowState<O>,
     ctxt: O::Ctxt,
     mir: &'a Mir<'tcx>,
-    tcx: &'a TyCtxt<'tcx>,
+    tcx: TyCtxt<'a, 'tcx, 'tcx>,
 }
 
 impl<'a, 'tcx: 'a, O> DataflowAnalysis<'a, 'tcx, O>
@@ -322,7 +322,7 @@ impl<O: BitDenotation> DataflowState<O> {
 
         let bits_per_block = self.operator.bits_per_block(ctxt);
         let usize_bits: usize = mem::size_of::<usize>() * 8;
-            
+
         for (word_index, &word) in words.iter().enumerate() {
             if word != 0 {
                 let base_index = word_index * usize_bits;
@@ -383,7 +383,7 @@ pub trait BitDenotation: DataflowOperator {
     /// the name to be reasonably short, again because it will be
     /// plugged into a filename.
     fn name() -> &'static str;
-    
+
     /// Size of each bitvector allocated for each block in the analysis.
     fn bits_per_block(&self, &Self::Ctxt) -> usize;
 
@@ -401,7 +401,7 @@ pub trait BitDenotation: DataflowOperator {
     /// gen and kill sets should reflect the effects of *executing*
     /// the start block itself.)
     fn start_block_effect(&self,
-                          _tcx: &TyCtxt,
+                          _tcx: TyCtxt,
                           ctxt: &Self::Ctxt,
                           mir: &Mir,
                           sets: &mut BlockSets);
@@ -417,7 +417,7 @@ pub trait BitDenotation: DataflowOperator {
     /// an identifying index: namely, the index of the statement
     /// in the basic block.
     fn statement_effect(&self,
-                        _tcx: &TyCtxt,
+                        _tcx: TyCtxt,
                         ctxt: &Self::Ctxt,
                         sets: &mut BlockSets,
                         bb: repr::BasicBlock,
@@ -438,7 +438,7 @@ pub trait BitDenotation: DataflowOperator {
     /// The effects applied here cannot depend on which branch the
     /// terminator took.
     fn terminator_effect(&self,
-                         _tcx: &TyCtxt,
+                         _tcx: TyCtxt,
                          ctxt: &Self::Ctxt,
                          sets: &mut BlockSets,
                          bb: repr::BasicBlock,
@@ -464,7 +464,7 @@ pub trait BitDenotation: DataflowOperator {
     /// might want to look into narrowing that to something more
     /// specific, just to make the interface more self-documenting.
     fn propagate_call_return(&self,
-                             _tcx: &TyCtxt,
+                             _tcx: TyCtxt,
                              ctxt: &Self::Ctxt,
                              in_out: &mut [usize],
                              call_bb: repr::BasicBlock,
@@ -475,7 +475,7 @@ pub trait BitDenotation: DataflowOperator {
 impl<'a, 'tcx: 'a, D> DataflowAnalysis<'a, 'tcx, D>
     where D: BitDenotation, D::Ctxt: HasMoveData<'tcx>
 {
-    pub fn new(tcx: &'a TyCtxt<'tcx>,
+    pub fn new(tcx: TyCtxt<'a, 'tcx, 'tcx>,
                mir: &'a Mir<'tcx>,
                ctxt: D::Ctxt,
                denotation: D) -> Self {
@@ -504,7 +504,7 @@ impl<'a, 'tcx: 'a, D> DataflowAnalysis<'a, 'tcx, D>
                            mir: mir,
                            tcx: tcx,
         }
-                           
+
     }
 }
 
@@ -632,7 +632,7 @@ impl<'a, 'tcx: 'a, D> DataflowAnalysis<'a, 'tcx, D>
 #[derive(Debug, Default)]
 pub struct MaybeInitializedLvals<'a, 'tcx: 'a> {
     // See "Note on PhantomData" above.
-    phantom: PhantomData<Fn(&'a MoveData<'tcx>, &'a TyCtxt<'tcx>, &'a Mir<'tcx>)>,
+    phantom: PhantomData<Fn(&'a MoveData<'tcx>, TyCtxt<'a, 'tcx, 'tcx>, &'a Mir<'tcx>)>,
 }
 
 /// `MaybeUninitializedLvals` tracks all l-values that might be
@@ -706,7 +706,7 @@ impl<'tcx> BitDenotation for MovingOutStatements<'tcx> {
         &ctxt.moves[idx]
     }
     fn start_block_effect(&self,
-                          _tcx: &TyCtxt,
+                          _tcx: TyCtxt,
                           _move_data: &Self::Ctxt,
                           _mir: &Mir,
                           _sets: &mut BlockSets) {
@@ -714,7 +714,7 @@ impl<'tcx> BitDenotation for MovingOutStatements<'tcx> {
         // execution, so this method has no effect on `_sets`.
     }
     fn statement_effect(&self,
-                        _tcx: &TyCtxt,
+                        _tcx: TyCtxt,
                         move_data: &Self::Ctxt,
                         sets: &mut BlockSets,
                         bb: repr::BasicBlock,
@@ -755,7 +755,7 @@ impl<'tcx> BitDenotation for MovingOutStatements<'tcx> {
     }
 
     fn terminator_effect(&self,
-                         tcx: &TyCtxt,
+                         tcx: TyCtxt,
                          move_data: &Self::Ctxt,
                          sets: &mut BlockSets,
                          bb: repr::BasicBlock,
@@ -775,7 +775,7 @@ impl<'tcx> BitDenotation for MovingOutStatements<'tcx> {
     }
 
     fn propagate_call_return(&self,
-                             tcx: &TyCtxt,
+                             tcx: TyCtxt,
                              move_data: &Self::Ctxt,
                              in_out: &mut [usize],
                              call_bb: repr::BasicBlock,
@@ -798,7 +798,7 @@ impl<'tcx> BitDenotation for MovingOutStatements<'tcx> {
 
 impl<'a, 'tcx> BitDenotation for MaybeInitializedLvals<'a, 'tcx> {
     type Bit = MovePath<'tcx>;
-    type Ctxt = (&'a TyCtxt<'tcx>, &'a Mir<'tcx>, MoveData<'tcx>);
+    type Ctxt = (TyCtxt<'a, 'tcx, 'tcx>, &'a Mir<'tcx>, MoveData<'tcx>);
     fn name() -> &'static str { "maybe_init" }
     fn bits_per_block(&self, ctxt: &Self::Ctxt) -> usize {
         ctxt.2.move_paths.len()
@@ -809,7 +809,7 @@ impl<'a, 'tcx> BitDenotation for MaybeInitializedLvals<'a, 'tcx> {
 
     // sets on_entry bits for Arg lvalues
     fn start_block_effect(&self,
-                          tcx: &TyCtxt,
+                          tcx: TyCtxt,
                           ctxt: &Self::Ctxt,
                           mir: &Mir,
                           sets: &mut BlockSets) {
@@ -826,7 +826,7 @@ impl<'a, 'tcx> BitDenotation for MaybeInitializedLvals<'a, 'tcx> {
         // let move_paths = &move_data.move_paths;
         // let path_map = &move_data.path_map;
         // let rev_lookup = &move_data.rev_lookup;
-        // 
+        //
         // for i in 0..(mir.arg_decls.len() as u32) {
         //     let lvalue = repr::Lvalue::Arg(i);
         //     let move_path_index = rev_lookup.find(&lvalue);
@@ -845,7 +845,7 @@ impl<'a, 'tcx> BitDenotation for MaybeInitializedLvals<'a, 'tcx> {
     // gens bits for lvalues initialized by statement
     // kills bits for lvalues moved-out by statement
     fn statement_effect(&self,
-                        tcx: &TyCtxt,
+                        tcx: TyCtxt,
                         ctxt: &Self::Ctxt,
                         sets: &mut BlockSets,
                         bb: repr::BasicBlock,
@@ -875,7 +875,7 @@ impl<'a, 'tcx> BitDenotation for MaybeInitializedLvals<'a, 'tcx> {
             if let MovePathContent::Lvalue(ref lvalue) = move_data.move_paths[move_path_index].content {
                 let ty = mir.lvalue_ty(tcx, lvalue).to_ty(tcx);
                 let empty_param_env = tcx.empty_parameter_environment();
-                if !ty.moves_by_default(&empty_param_env, DUMMY_SP) {
+                if !ty.moves_by_default(tcx, &empty_param_env, DUMMY_SP) {
                     continue;
                 }
             }
@@ -934,7 +934,7 @@ impl<'a, 'tcx> BitDenotation for MaybeInitializedLvals<'a, 'tcx> {
     }
 
     fn terminator_effect(&self,
-                         tcx: &TyCtxt,
+                         tcx: TyCtxt,
                          ctxt: &Self::Ctxt,
                          sets: &mut BlockSets,
                          bb: repr::BasicBlock,
@@ -965,7 +965,7 @@ impl<'a, 'tcx> BitDenotation for MaybeInitializedLvals<'a, 'tcx> {
     }
 
     fn propagate_call_return(&self,
-                             tcx: &TyCtxt,
+                             tcx: TyCtxt,
                              ctxt: &Self::Ctxt,
                              in_out: &mut [usize],
                              call_bb: repr::BasicBlock,
@@ -1002,7 +1002,7 @@ impl<'tcx> BitDenotation for MaybeUninitializedLvals<'tcx> {
 
     // sets on_entry bits for Arg lvalues
     fn start_block_effect(&self,
-                          tcx: &TyCtxt,
+                          tcx: TyCtxt,
                           move_data: &Self::Ctxt,
                           mir: &Mir,
                           sets: &mut BlockSets) {
@@ -1019,7 +1019,7 @@ impl<'tcx> BitDenotation for MaybeUninitializedLvals<'tcx> {
     // gens bits for lvalues moved-out by statement
     // kills bits for lvalues initialized by statement
     fn statement_effect(&self,
-                        tcx: &TyCtxt,
+                        tcx: TyCtxt,
                         move_data: &Self::Ctxt,
                         sets: &mut BlockSets,
                         bb: repr::BasicBlock,
@@ -1077,7 +1077,7 @@ impl<'tcx> BitDenotation for MaybeUninitializedLvals<'tcx> {
     }
 
     fn terminator_effect(&self,
-                         tcx: &TyCtxt,
+                         tcx: TyCtxt,
                          move_data: &Self::Ctxt,
                          sets: &mut BlockSets,
                          bb: repr::BasicBlock,
@@ -1108,7 +1108,7 @@ impl<'tcx> BitDenotation for MaybeUninitializedLvals<'tcx> {
 
 
     fn propagate_call_return(&self,
-                             tcx: &TyCtxt,
+                             tcx: TyCtxt,
                              move_data: &Self::Ctxt,
                              in_out: &mut [usize],
                              call_bb: repr::BasicBlock,

@@ -624,8 +624,10 @@ fn gather_moves<'a, 'tcx>(mir: &Mir<'tcx>, tcx: TyCtxt<'a, 'tcx, 'tcx>) -> MoveD
                             // example where I am seeing this arise is
                             // `TargetDataLayout::parse(&Session)` in
                             // `rustc::ty::layout`.
-                            debug!("encountered Rvalue::Slice as RHS of Assign, source: {:?} \n{}",
-                                   source, "?");
+                            //
+                            // this should be removed soon.
+                            debug!("encountered Rvalue::Slice as RHS of Assign, source: {:?}",
+                                   source);
                         }
                     }
                 }

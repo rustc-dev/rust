@@ -74,22 +74,23 @@ pub fn borrowck_mir<'a, 'tcx: 'a>(
         }
     }
 
-    let move_data = MoveData::gather_moves(mir, bcx.tcx);
-    let ctxt = (bcx.tcx, mir, move_data);
+    let tcx = bcx.tcx;
+    let move_data = MoveData::gather_moves(mir, tcx);
+    let ctxt = (tcx, mir, move_data);
     let ((_, _, move_data), flow_inits) =
         do_dataflow(bcx, mir, id, attributes, ctxt, MaybeInitializedLvals::default());
     let (move_data, flow_uninits) =
         do_dataflow(bcx, mir, id, attributes, move_data, MaybeUninitializedLvals::default());
 
     let move_data = if has_rustc_mir_with(attributes, "dataflow_info_maybe_init").is_some() {
-        let ctxt = (bcx.tcx, mir, move_data);
-        dataflow::issue_result_info(bcx.tcx.sess, mir, &ctxt, &flow_inits);
+        let ctxt = (tcx, mir, move_data);
+        dataflow::issue_result_info(tcx.sess, mir, &ctxt, &flow_inits);
         ctxt.2
     } else {
         move_data
     };
     if has_rustc_mir_with(attributes, "dataflow_info_maybe_uninit").is_some() {
-        dataflow::issue_result_info(bcx.tcx.sess,
+        dataflow::issue_result_info(tcx.sess,
                                     mir,
                                     &move_data,
                                     &flow_uninits);
@@ -134,10 +135,12 @@ pub fn borrowck_mir<'a, 'tcx: 'a>(
             return None;
         };
 
+        let tcx = bcx.tcx;
+
         let print_preflow_to =
-            name_found(bcx.tcx.sess, attributes, "borrowck_graphviz_preflow");
+            name_found(tcx.sess, attributes, "borrowck_graphviz_preflow");
         let print_postflow_to =
-            name_found(bcx.tcx.sess, attributes, "borrowck_graphviz_postflow");
+            name_found(tcx.sess, attributes, "borrowck_graphviz_postflow");
 
         let mut mbcx = MirBorrowckCtxtPreDataflow {
             bcx: bcx,
@@ -145,7 +148,7 @@ pub fn borrowck_mir<'a, 'tcx: 'a>(
             node_id: node_id,
             print_preflow_to: print_preflow_to,
             print_postflow_to: print_postflow_to,
-            flow_state: DataflowAnalysis::new(bcx.tcx, mir, ctxt, bd),
+            flow_state: DataflowAnalysis::new(tcx, mir, ctxt, bd),
         };
 
         mbcx.dataflow();
