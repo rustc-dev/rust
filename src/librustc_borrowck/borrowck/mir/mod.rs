@@ -82,26 +82,21 @@ pub fn borrowck_mir<'a, 'tcx: 'a>(
 
     let move_data = MoveData::gather_moves(mir, tcx);
     let ctxt = (tcx, mir, move_data);
-    let ((_, _, move_data), flow_inits) =
+    let (ctxt, flow_inits) =
         do_dataflow(tcx, mir, id, attributes, ctxt, MaybeInitializedLvals::default());
-    let ctxt = (tcx, mir, move_data);
-    let ((_, _, move_data), flow_uninits) =
+    let (ctxt, flow_uninits) =
         do_dataflow(tcx, mir, id, attributes, ctxt, MaybeUninitializedLvals::default());
 
-    let mut move_data = if has_rustc_mir_with(attributes, "dataflow_info_maybe_init").is_some() {
-        let ctxt = (tcx, mir, move_data);
-        dataflow::issue_result_info(tcx.sess, mir, &ctxt, &flow_inits);
-        ctxt.2
-    } else {
-        move_data
-    };
-    if has_rustc_mir_with(attributes, "dataflow_info_maybe_uninit").is_some() {
-        let ctxt = (tcx, mir, move_data);
-        dataflow::issue_result_info(tcx.sess,
-                                    mir,
-                                    &ctxt,
-                                    &flow_uninits);
-        move_data = ctxt.2;
+    if has_rustc_mir_with(attributes, "rustc_peek_maybe_init").is_some() {
+        dataflow::sanity_check_via_rustc_peek(bcx.tcx, mir, id, attributes, &ctxt, &flow_inits);
+    }
+    if has_rustc_mir_with(attributes, "rustc_peek_maybe_uninit").is_some() {
+        dataflow::sanity_check_via_rustc_peek(bcx.tcx, mir, id, attributes, &ctxt, &flow_uninits);
+    }
+    let move_data = ctxt.2;
+
+    if has_rustc_mir_with(attributes, "stop_after_dataflow").is_some() {
+        bcx.tcx.sess.fatal("stop_after_dataflow ended compilation");
     }
 
     let mut mbcx = MirBorrowckCtxt {
