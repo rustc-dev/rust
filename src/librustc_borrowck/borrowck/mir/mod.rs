@@ -199,10 +199,41 @@ impl<'b, 'a: 'b, 'tcx: 'a> MirBorrowckCtxt<'b, 'a, 'tcx> {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Copy, Clone)]
 enum DropFlagState {
     Live,
     Dead
+}
+
+impl DropFlagState {
+    fn value(self) -> bool {
+        match self {
+            DropFlagState::Live => true,
+            DropFlagState::Dead => false
+        }
+    }
+}
+
+fn move_path_children_matching<'tcx, F>(move_paths: &MovePathData<'tcx>,
+                                        path: MovePathIndex,
+                                        mut cond: F)
+                                        -> Option<MovePathIndex>
+    where F: FnMut(&repr::LvalueProjection<'tcx>) -> bool
+{
+    let mut next_child = move_paths[path].first_child;
+    while let Some(child_index) = next_child {
+        match move_paths[child_index].content {
+            MovePathContent::Lvalue(repr::Lvalue::Projection(ref proj)) => {
+                if cond(proj) {
+                    return Some(child_index)
+                }
+            }
+            _ => {}
+        }
+        next_child = move_paths[child_index].next_sibling;
+    }
+
+    None
 }
 
 fn on_all_children_bits<F>(move_paths: &MovePathData,
@@ -263,7 +294,7 @@ fn drop_flag_effects_for_location<'a, 'tcx, F>(
         if let MovePathContent::Lvalue(ref lvalue) = move_data.move_paths[path].content {
             let ty = mir.lvalue_ty(tcx, lvalue).to_ty(tcx);
             let empty_param_env = tcx.empty_parameter_environment();
-            if !ty.moves_by_default(&empty_param_env, DUMMY_SP) {
+            if !ty.moves_by_default(tcx, &empty_param_env, DUMMY_SP) {
                 continue;
             }
         }
@@ -277,16 +308,23 @@ fn drop_flag_effects_for_location<'a, 'tcx, F>(
     match bb.statements.get(loc.index) {
         Some(stmt) => match stmt.kind {
             repr::StatementKind::Assign(ref lvalue, _) => {
-                debug!("applying assignment {:?}", stmt);
+                debug!("drop_flag_effects: assignment {:?}", stmt);
                 on_all_children_bits(&move_data.move_paths,
                                      move_data.rev_lookup.find(lvalue),
                                      |moi| callback(moi, DropFlagState::Live))
             }
         },
         None => {
-            // terminator - no move-ins except for function return edge
             let term = bb.terminator();
-            debug!("applying terminator {:?}", term);
+            debug!("drop_flag_effects: terminator {:?}", term);
+            match bb.terminator().kind {
+                repr::TerminatorKind::DropAndReplace { ref location, .. } => {
+                    on_all_children_bits(&move_data.move_paths,
+                                         move_data.rev_lookup.find(location),
+                                         |moi| callback(moi, DropFlagState::Live))
+                }
+                _ => {}
+            }
         }
     }
 }

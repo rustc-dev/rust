@@ -516,6 +516,25 @@ impl<'a, 'gcx, 'tcx> Builder<'a, 'gcx, 'tcx> {
         next_target.unit()
     }
 
+    pub fn build_drop_and_replace(&mut self,
+                                  block: BasicBlock,
+                                  span: Span,
+                                  location: Lvalue<'tcx>,
+                                  value: Operand<'tcx>) -> BlockAnd<()> {
+        let scope_id = self.innermost_scope_id();
+        let next_target = self.cfg.start_new_block();
+        let diverge_target = self.diverge_cleanup();
+        self.cfg.terminate(block,
+                           scope_id,
+                           span,
+                           TerminatorKind::DropAndReplace {
+                               location: location,
+                               value: value,
+                               target: next_target,
+                               unwind: diverge_target,
+                           });
+        next_target.unit()
+    }
 
     // Panicking
     // =========

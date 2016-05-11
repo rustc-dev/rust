@@ -15,7 +15,7 @@
 #![doc(html_logo_url = "https://www.rust-lang.org/logos/rust-logo-128x128-blk-v2.png",
       html_favicon_url = "https://doc.rust-lang.org/favicon.ico",
       html_root_url = "https://doc.rust-lang.org/nightly/")]
-#![cfg_attr(not(stage0), deny(warnings))]
+//#![cfg_attr(not(stage0), deny(warnings))]
 
 #![allow(non_camel_case_types)]
 
@@ -26,6 +26,7 @@
 #![feature(associated_consts)]
 #![feature(nonzero)]
 #![feature(question_mark)]
+
 #[macro_use] extern crate log;
 #[macro_use] extern crate syntax;
 

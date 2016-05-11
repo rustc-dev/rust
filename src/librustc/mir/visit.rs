@@ -402,6 +402,16 @@ macro_rules! make_mir_visitor {
                         unwind.map(|t| self.visit_branch(block, t));
                     }
 
+                    TerminatorKind::DropAndReplace { ref $($mutability)* location,
+                                                     ref $($mutability)* value,
+                                                     target,
+                                                     unwind } => {
+                        self.visit_lvalue(location, LvalueContext::Drop);
+                        self.visit_operand(value);
+                        self.visit_branch(block, target);
+                        unwind.map(|t| self.visit_branch(block, t));
+                    }
+
                     TerminatorKind::Call { ref $($mutability)* func,
                                            ref $($mutability)* args,
                                            ref $($mutability)* destination,

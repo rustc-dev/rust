@@ -167,6 +167,7 @@ impl<'a, 'tcx, O: BitDenotation, R> InfoWarn<'a, 'tcx, O, R>
             TerminatorKind::Resume { .. } |
             TerminatorKind::Return { .. } |
             TerminatorKind::Drop { .. } |
+            TerminatorKind::DropAndReplace { .. } |
             TerminatorKind::Call { .. } => {
                 span_last_line(self.sess.codemap(), term_span)
             }
@@ -185,14 +186,15 @@ impl<'a, 'tcx, O: BitDenotation, R> InfoWarn<'a, 'tcx, O, R>
 
         rendered.push_str("exit:");
         rendered.push_str(match bb_data.terminator().kind {
-            TerminatorKind::Goto { .. }      => "goto      ",
-            TerminatorKind::Resume { .. }    => "resume    ",
-            TerminatorKind::Return { .. }    => "return    ",
-            TerminatorKind::Drop { .. }      => "drop      ",
-            TerminatorKind::Call { .. }      => "call      ",
-            TerminatorKind::If { .. }        => "if        ",
-            TerminatorKind::Switch { .. }    => "switch    ",
-            TerminatorKind::SwitchInt { .. } => "switch_int",
+            TerminatorKind::Goto { .. }           => "goto      ",
+            TerminatorKind::Resume { .. }         => "resume    ",
+            TerminatorKind::Return { .. }         => "return    ",
+            TerminatorKind::Drop { .. }           => "drop      ",
+            TerminatorKind::DropAndReplace { .. } => "replace   ",
+            TerminatorKind::Call { .. }           => "call      ",
+            TerminatorKind::If { .. }             => "if        ",
+            TerminatorKind::Switch { .. }         => "switch    ",
+            TerminatorKind::SwitchInt { .. }      => "switch_int",
         });
 
         self.push_rendered_elem_strs(&interpreted[..], &mut rendered);

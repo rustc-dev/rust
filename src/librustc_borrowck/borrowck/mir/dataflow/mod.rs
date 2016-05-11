@@ -237,7 +237,7 @@ impl<'a, 'tcx: 'a, O> DataflowAnalysis<'a, 'tcx, O>
 pub struct DataflowResults<O: BitDenotation>(DataflowState<O>);
 
 impl<O: BitDenotation> DataflowResults<O> {
-    fn sets(&self) -> &AllSets {
+    pub fn sets(&self) -> &AllSets {
         &self.0.sets
     }
 }
@@ -318,13 +318,6 @@ impl AllSets {
 }
 
 impl<O: BitDenotation> DataflowState<O> {
-    pub fn set_at_location(&self, ctxt: &O::Ctxt, location: Location) -> Vec<usize> {
-        let Location { block, index } = location;
-        let mut set: Vec<_> = self.sets.on_entry_set_for(block.index()).to_owned();
-        let mut kill_set = 0;
-        unimplemented!()
-    }
-
     fn each_bit<F>(&self, ctxt: &O::Ctxt, words: &[usize], mut f: F)
         where F: FnMut(usize) {
         //! Helper for iterating over the bits in a bitvector.
@@ -537,10 +530,14 @@ impl<'a, 'tcx: 'a, D> DataflowAnalysis<'a, 'tcx, D>
             repr::TerminatorKind::Return |
             repr::TerminatorKind::Resume => {}
             repr::TerminatorKind::Goto { ref target } |
-            repr::TerminatorKind::Drop { ref target, value: _, unwind: None } => {
+            repr::TerminatorKind::Drop { ref target, value: _, unwind: None } |
+            repr::TerminatorKind::DropAndReplace { ref target, value: _, location: _, unwind: None } => {
                 self.propagate_bits_into_entry_set_for(in_out, changed, target);
             }
-            repr::TerminatorKind::Drop { ref target, value: _, unwind: Some(ref unwind) } => {
+            repr::TerminatorKind::Drop { ref target, value: _, unwind: Some(ref unwind) } |
+            repr::TerminatorKind::DropAndReplace {
+                ref target, value: _, location: _, unwind: Some(ref unwind)
+            } => {
                 self.propagate_bits_into_entry_set_for(in_out, changed, target);
                 self.propagate_bits_into_entry_set_for(in_out, changed, unwind);
             }
@@ -676,7 +673,7 @@ pub struct MaybeInitializedLvals<'a, 'tcx: 'a> {
 #[derive(Debug, Default)]
 pub struct MaybeUninitializedLvals<'a, 'tcx: 'a> {
     // See "Note on PhantomData" above.
-    phantom: PhantomData<Fn(&'a MoveData<'tcx>, &'a TyCtxt<'tcx>, &'a Mir<'tcx>)>
+    phantom: PhantomData<Fn(&'a MoveData<'tcx>, TyCtxt<'a, 'tcx, 'tcx>, &'a Mir<'tcx>)>
 }
 
 /// `MovingOutStatements` tracks the statements that perform moves out
@@ -695,12 +692,12 @@ pub struct MaybeUninitializedLvals<'a, 'tcx: 'a> {
 #[derive(Debug, Default)]
 pub struct MovingOutStatements<'a, 'tcx: 'a> {
     // See "Note on PhantomData" above.
-    phantom: PhantomData<Fn(&'a MoveData<'tcx>, &'a TyCtxt<'tcx>, &'a Mir<'tcx>)>
+    phantom: PhantomData<Fn(&'a MoveData<'tcx>, TyCtxt<'a, 'tcx, 'tcx>, &'a Mir<'tcx>)>
 }
 
 impl<'a, 'tcx> BitDenotation for MovingOutStatements<'a, 'tcx> {
     type Bit = MoveOut;
-    type Ctxt = (&'a TyCtxt<'tcx>, &'a Mir<'tcx>, MoveData<'tcx>);
+    type Ctxt = (TyCtxt<'a, 'tcx, 'tcx>, &'a Mir<'tcx>, MoveData<'tcx>);
     fn name() -> &'static str { "moving_out" }
     fn bits_per_block(&self, ctxt: &Self::Ctxt) -> usize {
         ctxt.2.moves.len()
@@ -805,12 +802,12 @@ impl<'a, 'tcx> MaybeInitializedLvals<'a, 'tcx> {
     {
         match state {
             DropFlagState::Dead => {
-                sets.gen_set.set_bit(path.idx());
-                sets.kill_set.clear_bit(path.idx());
+                sets.gen_set.clear_bit(path.idx());
+                sets.kill_set.set_bit(path.idx());
             }
             DropFlagState::Live => {
-                sets.kill_set.set_bit(path.idx());
-                sets.gen_set.clear_bit(path.idx());
+                sets.gen_set.set_bit(path.idx());
+                sets.kill_set.clear_bit(path.idx());
             }
         }
     }
@@ -821,13 +818,13 @@ impl<'a, 'tcx> MaybeUninitializedLvals<'a, 'tcx> {
                    state: super::DropFlagState)
     {
         match state {
-            DropFlagState::Live => {
+            DropFlagState::Dead => {
                 sets.gen_set.set_bit(path.idx());
                 sets.kill_set.clear_bit(path.idx());
             }
-            DropFlagState::Dead => {
-                sets.kill_set.set_bit(path.idx());
+            DropFlagState::Live => {
                 sets.gen_set.clear_bit(path.idx());
+                sets.kill_set.set_bit(path.idx());
             }
         }
     }
@@ -881,33 +878,27 @@ impl<'a, 'tcx> BitDenotation for MaybeInitializedLvals<'a, 'tcx> {
     }
 
     fn propagate_call_return(&self,
-                             tcx: TyCtxt,
+                             _tcx: TyCtxt,
                              ctxt: &Self::Ctxt,
                              in_out: &mut [usize],
-                             call_bb: repr::BasicBlock,
-                             dest_bb: repr::BasicBlock,
+                             _call_bb: repr::BasicBlock,
+                             _dest_bb: repr::BasicBlock,
                              dest_lval: &repr::Lvalue) {
         // when a call returns successfully, that means we need to set
         // the bits for that dest_lval to 1 (initialized).
         let move_data = &ctxt.2;
         let move_path_index = move_data.rev_lookup.find(dest_lval);
-        let bits_per_block = self.bits_per_block(ctxt);
-        in_out.set_bit(move_path_index.idx());
-        on_all_children_bits(in_out,
-                             &move_data.path_map,
-                             &move_data.move_paths,
-                             move_path_index,
-                             &|in_out, moi| {
-                                 let mpi = moi.move_path_index(move_data);
-                                 assert!(mpi.idx() < bits_per_block);
-                                 in_out.set_bit(mpi.idx());
-                             });
+        super::on_all_children_bits(
+            &move_data.move_paths,
+            move_path_index,
+            |mpi| { in_out.set_bit(mpi.idx()); }
+        );
     }
 }
 
 impl<'a, 'tcx> BitDenotation for MaybeUninitializedLvals<'a, 'tcx> {
     type Bit = MovePath<'tcx>;
-    type Ctxt = (&'a TyCtxt<'tcx>, &'a Mir<'tcx>, MoveData<'tcx>);
+    type Ctxt = (TyCtxt<'a, 'tcx, 'tcx>, &'a Mir<'tcx>, MoveData<'tcx>);
     fn name() -> &'static str { "maybe_uninit" }
     fn bits_per_block(&self, ctxt: &Self::Ctxt) -> usize {
         ctxt.2.move_paths.len()
@@ -918,6 +909,8 @@ impl<'a, 'tcx> BitDenotation for MaybeUninitializedLvals<'a, 'tcx> {
 
     // sets on_entry bits for Arg lvalues
     fn start_block_effect(&self, ctxt: &Self::Ctxt, sets: &mut BlockSets) {
+        for e in &mut sets.on_entry[..] { *e = !0; }
+
         super::drop_flag_effects_for_function_entry(
             ctxt.0, ctxt.1, &ctxt.2,
             |path, s| {
@@ -953,27 +946,21 @@ impl<'a, 'tcx> BitDenotation for MaybeUninitializedLvals<'a, 'tcx> {
     }
 
     fn propagate_call_return(&self,
-                             tcx: TyCtxt,
+                             _tcx: TyCtxt,
                              ctxt: &Self::Ctxt,
                              in_out: &mut [usize],
-                             call_bb: repr::BasicBlock,
-                             dest_bb: repr::BasicBlock,
+                             _call_bb: repr::BasicBlock,
+                             _dest_bb: repr::BasicBlock,
                              dest_lval: &repr::Lvalue) {
-        // when a call returns successfully, that means we need to
-        // clear the bits for that (definitely initialized) dest_lval.
+        // when a call returns successfully, that means we need to set
+        // the bits for that dest_lval to 1 (initialized).
         let move_data = &ctxt.2;
         let move_path_index = move_data.rev_lookup.find(dest_lval);
-        let bits_per_block = self.bits_per_block(ctxt);
-        in_out.clear_bit(move_path_index.idx());
-        on_all_children_bits(in_out,
-                             &move_data.path_map,
-                             &move_data.move_paths,
-                             move_path_index,
-                             &|in_out, moi| {
-                                 let mpi = moi.move_path_index(move_data);
-                                 assert!(mpi.idx() < bits_per_block);
-                                 in_out.clear_bit(mpi.idx());
-                             });
+        super::on_all_children_bits(
+            &move_data.move_paths,
+            move_path_index,
+            |mpi| { in_out.clear_bit(mpi.idx()); }
+        );
     }
 }
 
@@ -1027,7 +1014,7 @@ impl<'a, 'tcx> DataflowOperator for MaybeInitializedLvals<'a, 'tcx> {
 impl<'a, 'tcx> DataflowOperator for MaybeUninitializedLvals<'a, 'tcx> {
     #[inline]
     fn initial_value() -> bool {
-        true // lvalues start uninitialized
+        false // lvalues start uninitialized
     }
 }
 

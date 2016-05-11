@@ -634,6 +634,7 @@ fn gather_moves<'a, 'tcx>(mir: &Mir<'tcx>, tcx: TyCtxt<'a, 'tcx, 'tcx>) -> MoveD
             }
         }
 
+        debug!("gather_moves({:?})", bb_data.terminator());
         match bb_data.terminator().kind {
             TerminatorKind::Goto { target: _ } | TerminatorKind::Resume => { }
 
@@ -651,7 +652,6 @@ fn gather_moves<'a, 'tcx>(mir: &Mir<'tcx>, tcx: TyCtxt<'a, 'tcx, 'tcx>) -> MoveD
             TerminatorKind::If { ref cond, targets: _ } => {
                 let source = Location { block: bb,
                                         index: bb_data.statements.len() };
-                debug!("gather_moves If on_operand {:?} {:?}", cond, source);
                 bb_ctxt.on_operand(SK::If, cond, source);
             }
 
@@ -667,10 +667,13 @@ fn gather_moves<'a, 'tcx>(mir: &Mir<'tcx>, tcx: TyCtxt<'a, 'tcx, 'tcx>) -> MoveD
             TerminatorKind::Drop { value: ref lval, target: _, unwind: _ } => {
                 let source = Location { block: bb,
                                         index: bb_data.statements.len() };
-                debug!("gather_moves Drop on_move_out_lval {:?} {:?}", lval, source);
                 bb_ctxt.on_move_out_lval(SK::Drop, lval, source);
             }
-
+            TerminatorKind::DropAndReplace { location: ref lval, value: ref val, .. } => {
+                let source = Location { block: bb,
+                                        index: bb_data.statements.len() };
+                bb_ctxt.on_operand(SK::Use, val, source);
+            }
             TerminatorKind::Call { ref func, ref args, ref destination, cleanup: _ } => {
                 let source = Location { block: bb,
                                         index: bb_data.statements.len() };
