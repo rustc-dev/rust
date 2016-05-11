@@ -756,28 +756,6 @@ impl<'b, 'a: 'b, 'tcx: 'a> BlockContext<'b, 'a, 'tcx> {
                         lval: &Lvalue<'tcx>,
                         source: Location) {
         let tcx = self.tcx;
-        let lval_ty = self.builder.mir.lvalue_ty(tcx, lval);
-
-        // FIXME: does lvalue_ty ever return TyError, or is it
-        // guaranteed to always return non-Infer/non-Error values?
-
-        // This code is (was) just trying to avoid creating a MoveOut
-        // entry for values that do not need move semantics.
-        //
-        // type_contents is imprecise (may claim needs drop for
-        // types that in fact have no destructor). But that is
-        // still usable for our purposes here.
-        //
-        // Update: I have removed the filter in an attempt to
-        // establish broader invariants about MoveOut's, and
-        // corresponding PathMap entries, existing when expected.
-        let consumed = true; // lval_ty.to_ty(tcx).type_contents(tcx).needs_drop(tcx);
-
-        if !consumed {
-            debug!("ctxt: {:?} no consume of lval: {:?} of type {:?}",
-                   stmt_kind, lval, lval_ty);
-            return;
-        }
         let i = source.index;
         let index = MoveOutIndex::new(self.moves.len());
 
