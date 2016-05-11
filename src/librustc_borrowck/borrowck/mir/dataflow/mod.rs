@@ -743,9 +743,9 @@ impl<'a, 'tcx> BitDenotation for MovingOutStatements<'a, 'tcx> {
                                      path_map,
                                      move_paths,
                                      move_path_index,
-                                     &|kill_set, mpi| {
-                                         assert!(mpi.idx() < bits_per_block);
-                                         kill_set.set_bit(mpi.idx());
+                                     &|kill_set, moi| {
+                                         assert!(moi.idx() < bits_per_block);
+                                         kill_set.set_bit(moi.idx());
                                      });
             }
         }
@@ -789,9 +789,9 @@ impl<'a, 'tcx> BitDenotation for MovingOutStatements<'a, 'tcx> {
                              &move_data.path_map,
                              &move_data.move_paths,
                              move_path_index,
-                             &|in_out, mpi| {
-                                 assert!(mpi.idx() < bits_per_block);
-                                 in_out.clear_bit(mpi.idx());
+                             &|in_out, moi| {
+                                 assert!(moi.idx() < bits_per_block);
+                                 in_out.clear_bit(moi.idx());
                              });
     }
 }
