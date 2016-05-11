@@ -490,6 +490,21 @@ impl<'b, 'tcx> SharedCrateContext<'b, 'tcx> {
     pub fn mir_map(&self) -> &MirMap<'tcx> {
         &self.mir_map
     }
+
+    /// Given the def-id of some item that has no type parameters, make
+    /// a suitable "empty substs" for it.
+    pub fn empty_substs_for_def_id(&self, item_def_id: DefId) -> &'tcx Substs<'tcx> {
+        let scheme = self.tcx().lookup_item_type(item_def_id);
+        self.empty_substs_for_scheme(&scheme)
+    }
+
+    pub fn empty_substs_for_scheme(&self, scheme: &ty::TypeScheme<'tcx>)
+                                   -> &'tcx Substs<'tcx> {
+        assert!(scheme.generics.types.is_empty());
+        self.tcx().mk_substs(
+            Substs::new(VecPerParamSpace::empty(),
+                        scheme.generics.regions.map(|_| ty::ReStatic)))
+    }
 }
 
 impl<'tcx> LocalCrateContext<'tcx> {
@@ -900,16 +915,12 @@ impl<'b, 'tcx> CrateContext<'b, 'tcx> {
     /// Given the def-id of some item that has no type parameters, make
     /// a suitable "empty substs" for it.
     pub fn empty_substs_for_def_id(&self, item_def_id: DefId) -> &'tcx Substs<'tcx> {
-        let scheme = self.tcx().lookup_item_type(item_def_id);
-        self.empty_substs_for_scheme(&scheme)
+        self.shared().empty_substs_for_def_id(item_def_id)
     }
 
     pub fn empty_substs_for_scheme(&self, scheme: &ty::TypeScheme<'tcx>)
                                    -> &'tcx Substs<'tcx> {
-        assert!(scheme.generics.types.is_empty());
-        self.tcx().mk_substs(
-            Substs::new(VecPerParamSpace::empty(),
-                        scheme.generics.regions.map(|_| ty::ReStatic)))
+        self.shared().empty_substs_for_scheme(scheme)
     }
 }
 
