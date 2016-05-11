@@ -460,7 +460,6 @@ pub trait BitDenotation: DataflowOperator {
     /// might want to look into narrowing that to something more
     /// specific, just to make the interface more self-documenting.
     fn propagate_call_return(&self,
-                             _tcx: TyCtxt,
                              ctxt: &Self::Ctxt,
                              in_out: &mut [usize],
                              call_bb: repr::BasicBlock,
@@ -559,7 +558,7 @@ impl<'a, 'tcx: 'a, D> DataflowAnalysis<'a, 'tcx, D>
                     // N.B.: This must be done *last*, after all other
                     // propagation, as documented in comment above.
                     self.flow_state.operator.propagate_call_return(
-                        self.tcx, &self.ctxt, in_out, bb, *dest_bb, dest_lval);
+                        &self.ctxt, in_out, bb, *dest_bb, dest_lval);
                     self.propagate_bits_into_entry_set_for(in_out, changed, dest_bb);
                 }
             }
@@ -774,7 +773,6 @@ impl<'a, 'tcx> BitDenotation for MovingOutStatements<'a, 'tcx> {
     }
 
     fn propagate_call_return(&self,
-                             tcx: TyCtxt,
                              ctxt: &Self::Ctxt,
                              in_out: &mut [usize],
                              call_bb: repr::BasicBlock,
@@ -878,7 +876,6 @@ impl<'a, 'tcx> BitDenotation for MaybeInitializedLvals<'a, 'tcx> {
     }
 
     fn propagate_call_return(&self,
-                             _tcx: TyCtxt,
                              ctxt: &Self::Ctxt,
                              in_out: &mut [usize],
                              _call_bb: repr::BasicBlock,
@@ -946,7 +943,6 @@ impl<'a, 'tcx> BitDenotation for MaybeUninitializedLvals<'a, 'tcx> {
     }
 
     fn propagate_call_return(&self,
-                             _tcx: TyCtxt,
                              ctxt: &Self::Ctxt,
                              in_out: &mut [usize],
                              _call_bb: repr::BasicBlock,
