@@ -104,28 +104,39 @@ impl<'a, 'tcx: 'a, BD> DataflowAnalysis<'a, 'tcx, BD>
     }
 }
 
-fn on_all_children_bits<Each>(set: &mut [usize],
-                              path_map: &PathMap,
-                              move_paths: &MovePathData,
-                              move_path_index: MovePathIndex,
-                              each_child: &Each)
-    where Each: Fn(&mut [usize], MoveOutIndex)
+fn on_all_children_bits<Set: ?Sized, Each>(set: &mut Set,
+                                           path_map: &PathMap,
+                                           move_paths: &MovePathData,
+                                           move_path_index: MovePathIndex,
+                                           mut each_child: Each)
+    where Each: FnMut(&mut Set, MoveOutIndex)
 {
-    // 1. invoke `each_child` callback for all moves that directly
-    //    influence path for `move_path_index`
-    for move_index in &path_map[move_path_index] {
-        each_child(set, *move_index);
-    }
+    return on_all_children_bits_recur(
+        set, path_map, move_paths, move_path_index, &mut each_child);
 
-    // 2. for each child of the path (that is named in this
-    //    function), recur.
-    //
-    // (Unnamed children are irrelevant to dataflow; by
-    // definition they have no associated moves.)
-    let mut next_child_index = move_paths[move_path_index].first_child;
-    while let Some(child_index) = next_child_index {
-        on_all_children_bits(set, path_map, move_paths, child_index, each_child);
-        next_child_index = move_paths[child_index].next_sibling;
+    fn on_all_children_bits_recur<Set: ?Sized, Each>(set: &mut Set,
+                                                     path_map: &PathMap,
+                                                     move_paths: &MovePathData,
+                                                     move_path_index: MovePathIndex,
+                                                     each_child: &mut Each)
+        where Each: FnMut(&mut Set, MoveOutIndex)
+    {
+        // 1. invoke `each_child` callback for all moves that directly
+        //    influence path for `move_path_index`
+        for move_index in &path_map[move_path_index] {
+            each_child(set, *move_index);
+        }
+
+        // 2. for each child of the path (that is named in this
+        //    function), recur.
+        //
+        // (Unnamed children are irrelevant to dataflow; by
+        // definition they have no associated moves.)
+        let mut next_child_index = move_paths[move_path_index].first_child;
+        while let Some(child_index) = next_child_index {
+            on_all_children_bits_recur(set, path_map, move_paths, child_index, each_child);
+            next_child_index = move_paths[child_index].next_sibling;
+        }
     }
 }
 
@@ -742,7 +753,7 @@ impl<'a, 'tcx> BitDenotation for MovingOutStatements<'a, 'tcx> {
                                      path_map,
                                      move_paths,
                                      move_path_index,
-                                     &|kill_set, moi| {
+                                     |kill_set, moi| {
                                          assert!(moi.idx() < bits_per_block);
                                          kill_set.set_bit(moi.idx());
                                      });
@@ -787,7 +798,7 @@ impl<'a, 'tcx> BitDenotation for MovingOutStatements<'a, 'tcx> {
                              &move_data.path_map,
                              &move_data.move_paths,
                              move_path_index,
-                             &|in_out, moi| {
+                             |in_out, moi| {
                                  assert!(moi.idx() < bits_per_block);
                                  in_out.clear_bit(moi.idx());
                              });
@@ -992,24 +1003,39 @@ impl<'a, 'tcx> BitwiseOperator for MaybeUninitializedLvals<'a, 'tcx> {
     }
 }
 
+// FIXME: I'm not sure it ever makes sense to use `true` for a
+// DataflowOperator::initial_value implementation, because: the way
+// that dataflow fixed point iteration works, you want to start at
+// bottom and work your way to a fixed point.
+//
+// This means, for propagation across the graph, that you either want
+// to start at all-zeroes and then use Union as your merge when
+// propagating, or you start at all-ones and then use Intersect as
+// your merge when propagating.
+//
+// (An alternative could be, when propagating from Block A into block
+// B, to clear B's on_entry bits, and then iterate over all of B's
+// immediate predecessors. This would require storing on_exit state
+// for each block, however.)
+   
 impl<'a, 'tcx> DataflowOperator for MovingOutStatements<'a, 'tcx> {
     #[inline]
     fn initial_value() -> bool {
-        false // no loans in scope by default
+        false // bottom = no loans in scope by default
     }
 }
 
 impl<'a, 'tcx> DataflowOperator for MaybeInitializedLvals<'a, 'tcx> {
     #[inline]
     fn initial_value() -> bool {
-        false // lvalues start uninitialized
+        false // bottom = uninitialized
     }
 }
 
 impl<'a, 'tcx> DataflowOperator for MaybeUninitializedLvals<'a, 'tcx> {
     #[inline]
     fn initial_value() -> bool {
-        false // lvalues start uninitialized
+        false // bottom = uninitialized
     }
 }
 
