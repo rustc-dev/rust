@@ -104,27 +104,25 @@ impl<'a, 'tcx: 'a, BD> DataflowAnalysis<'a, 'tcx, BD>
     }
 }
 
-fn on_all_children_bits<Set: ?Sized, Each>(set: &mut Set,
-                                           path_map: &PathMap,
-                                           move_paths: &MovePathData,
-                                           move_path_index: MovePathIndex,
-                                           mut each_child: Each)
-    where Each: FnMut(&mut Set, MoveOutIndex)
+fn on_all_children_bits<Each>(path_map: &PathMap,
+                              move_paths: &MovePathData,
+                              move_path_index: MovePathIndex,
+                              mut each_child: Each)
+    where Each: FnMut(MoveOutIndex)
 {
     return on_all_children_bits_recur(
-        set, path_map, move_paths, move_path_index, &mut each_child);
+        path_map, move_paths, move_path_index, &mut each_child);
 
-    fn on_all_children_bits_recur<Set: ?Sized, Each>(set: &mut Set,
-                                                     path_map: &PathMap,
-                                                     move_paths: &MovePathData,
-                                                     move_path_index: MovePathIndex,
-                                                     each_child: &mut Each)
-        where Each: FnMut(&mut Set, MoveOutIndex)
+    fn on_all_children_bits_recur<Each>(path_map: &PathMap,
+                                        move_paths: &MovePathData,
+                                        move_path_index: MovePathIndex,
+                                        each_child: &mut Each)
+        where Each: FnMut(MoveOutIndex)
     {
         // 1. invoke `each_child` callback for all moves that directly
         //    influence path for `move_path_index`
         for move_index in &path_map[move_path_index] {
-            each_child(set, *move_index);
+            each_child(*move_index);
         }
 
         // 2. for each child of the path (that is named in this
@@ -134,7 +132,7 @@ fn on_all_children_bits<Set: ?Sized, Each>(set: &mut Set,
         // definition they have no associated moves.)
         let mut next_child_index = move_paths[move_path_index].first_child;
         while let Some(child_index) = next_child_index {
-            on_all_children_bits_recur(set, path_map, move_paths, child_index, each_child);
+            on_all_children_bits_recur(path_map, move_paths, child_index, each_child);
             next_child_index = move_paths[child_index].next_sibling;
         }
     }
@@ -749,13 +747,12 @@ impl<'a, 'tcx> BitDenotation for MovingOutStatements<'a, 'tcx> {
                 let move_path_index = rev_lookup.find(lvalue);
 
                 sets.kill_set.set_bit(move_path_index.idx());
-                on_all_children_bits(sets.kill_set,
-                                     path_map,
+                on_all_children_bits(path_map,
                                      move_paths,
                                      move_path_index,
-                                     |kill_set, moi| {
+                                     |moi| {
                                          assert!(moi.idx() < bits_per_block);
-                                         kill_set.set_bit(moi.idx());
+                                         sets.kill_set.set_bit(moi.idx());
                                      });
             }
         }
@@ -794,11 +791,10 @@ impl<'a, 'tcx> BitDenotation for MovingOutStatements<'a, 'tcx> {
         let bits_per_block = self.bits_per_block(ctxt);
 
         in_out.clear_bit(move_path_index.idx());
-        on_all_children_bits(in_out,
-                             &move_data.path_map,
+        on_all_children_bits(&move_data.path_map,
                              &move_data.move_paths,
                              move_path_index,
-                             |in_out, moi| {
+                             |moi| {
                                  assert!(moi.idx() < bits_per_block);
                                  in_out.clear_bit(moi.idx());
                              });
