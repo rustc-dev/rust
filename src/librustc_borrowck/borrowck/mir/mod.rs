@@ -21,7 +21,7 @@ use rustc::hir::intravisit::{FnKind};
 use rustc::mir::repr;
 use rustc::mir::repr::{BasicBlock, BasicBlockData, Mir, Statement, Terminator};
 use rustc::session::Session;
-use rustc::ty::TyCtxt;
+use rustc::ty::{self, TyCtxt};
 
 mod abs_domain;
 pub mod elaborate_drops;
@@ -236,25 +236,59 @@ fn move_path_children_matching<'tcx, F>(move_paths: &MovePathData<'tcx>,
     None
 }
 
-fn on_all_children_bits<F>(move_paths: &MovePathData,
-                           move_path_index: MovePathIndex,
-                           mut each_child: F)
+fn on_all_children_bits<'a, 'tcx, F>(
+    tcx: TyCtxt<'a, 'tcx, 'tcx>,
+    mir: &Mir<'tcx>,
+    move_data: &MoveData<'tcx>,
+    move_path_index: MovePathIndex,
+    mut each_child: F)
     where F: FnMut(MovePathIndex)
 {
-    fn on_all_children_bits<F>(move_paths: &MovePathData,
-                               move_path_index: MovePathIndex,
-                               mut each_child: &mut F)
+    fn is_terminal_path<'a, 'tcx>(
+        tcx: TyCtxt<'a, 'tcx, 'tcx>,
+        mir: &Mir<'tcx>,
+        move_data: &MoveData<'tcx>,
+        path: MovePathIndex) -> bool
+    {
+        match move_data.move_paths[path].content {
+            MovePathContent::Lvalue(ref lvalue) => {
+                match mir.lvalue_ty(tcx, lvalue).to_ty(tcx).sty {
+                    // don't trace paths past arrays, slices, and
+                    // pointers. They can only be accessed while
+                    // their parents are initialized.
+                    //
+                    // FIXME: we have to do something for moving
+                    // slice patterns.
+                    ty::TyArray(..) | ty::TySlice(..) |
+                    ty::TyRef(..) | ty::TyRawPtr(..) => true,
+                    _ => false
+                }
+            }
+            _ => true
+        }
+    }
+
+    fn on_all_children_bits<'a, 'tcx, F>(
+        tcx: TyCtxt<'a, 'tcx, 'tcx>,
+        mir: &Mir<'tcx>,
+        move_data: &MoveData<'tcx>,
+        move_path_index: MovePathIndex,
+        each_child: &mut F)
         where F: FnMut(MovePathIndex)
     {
         each_child(move_path_index);
 
-        let mut next_child_index = move_paths[move_path_index].first_child;
+        if is_terminal_path(tcx, mir, move_data, move_path_index) {
+            return
+        }
+
+        let mut next_child_index = move_data.move_paths[move_path_index].first_child;
         while let Some(child_index) = next_child_index {
-            on_all_children_bits(move_paths, child_index, each_child);
-            next_child_index = move_paths[child_index].next_sibling;
+            on_all_children_bits(tcx, mir, move_data, child_index, each_child);
+            next_child_index = move_data.move_paths[child_index].next_sibling;
         }
     }
-    on_all_children_bits(move_paths, move_path_index, &mut each_child);
+    on_all_children_bits(tcx, mir, move_data, move_path_index, &mut each_child);
 }
 
 fn drop_flag_effects_for_function_entry<'a, 'tcx, F>(
@@ -269,7 +303,7 @@ fn drop_flag_effects_for_function_entry<'a, 'tcx, F>(
     for i in 0..(mir.arg_decls.len() as u32) {
         let lvalue = repr::Lvalue::Arg(i);
         let move_path_index = move_data.rev_lookup.find(&lvalue);
-        on_all_children_bits(move_paths,
+        on_all_children_bits(tcx, mir, move_data,
                              move_path_index,
                              |moi| callback(moi, DropFlagState::Live));
     }
@@ -299,7 +333,7 @@ fn drop_flag_effects_for_location<'a, 'tcx, F>(
             }
         }
 
-        on_all_children_bits(&move_data.move_paths,
+        on_all_children_bits(tcx, mir, move_data,
                              path,
                              |moi| callback(moi, DropFlagState::Dead))
     }
@@ -309,7 +343,7 @@ fn drop_flag_effects_for_location<'a, 'tcx, F>(
         Some(stmt) => match stmt.kind {
             repr::StatementKind::Assign(ref lvalue, _) => {
                 debug!("drop_flag_effects: assignment {:?}", stmt);
-                on_all_children_bits(&move_data.move_paths,
+                on_all_children_bits(tcx, mir, move_data,
                                      move_data.rev_lookup.find(lvalue),
                                      |moi| callback(moi, DropFlagState::Live))
             }
@@ -319,7 +353,7 @@ fn drop_flag_effects_for_location<'a, 'tcx, F>(
             debug!("drop_flag_effects: terminator {:?}", term);
             match bb.terminator().kind {
                 repr::TerminatorKind::DropAndReplace { ref location, .. } => {
-                    on_all_children_bits(&move_data.move_paths,
+                    on_all_children_bits(tcx, mir, move_data,
                                          move_data.rev_lookup.find(location),
                                          |moi| callback(moi, DropFlagState::Live))
                 }

@@ -889,7 +889,7 @@ impl<'a, 'tcx> BitDenotation for MaybeInitializedLvals<'a, 'tcx> {
         let move_data = &ctxt.2;
         let move_path_index = move_data.rev_lookup.find(dest_lval);
         super::on_all_children_bits(
-            &move_data.move_paths,
+            ctxt.0, ctxt.1, &ctxt.2,
             move_path_index,
             |mpi| { in_out.set_bit(mpi.idx()); }
         );
@@ -954,10 +954,9 @@ impl<'a, 'tcx> BitDenotation for MaybeUninitializedLvals<'a, 'tcx> {
                              dest_lval: &repr::Lvalue) {
         // when a call returns successfully, that means we need to set
         // the bits for that dest_lval to 1 (initialized).
-        let move_data = &ctxt.2;
-        let move_path_index = move_data.rev_lookup.find(dest_lval);
+        let move_path_index = ctxt.2.rev_lookup.find(dest_lval);
         super::on_all_children_bits(
-            &move_data.move_paths,
+            ctxt.0, ctxt.1, &ctxt.2,
             move_path_index,
             |mpi| { in_out.clear_bit(mpi.idx()); }
         );

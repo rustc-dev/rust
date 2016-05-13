@@ -441,6 +441,8 @@ impl<'a, 'tcx> MovePathDataBuilder<'a, 'tcx> {
     }
 
     fn move_path_for(&mut self, lval: &Lvalue<'tcx>) -> MovePathIndex {
+        debug!("move_path_for({:?})", lval);
+
         let lookup: Lookup<MovePathIndex> = self.lookup(lval);
 
         // `lookup` is either the previously assigned index or a
@@ -672,6 +674,8 @@ fn gather_moves<'a, 'tcx>(mir: &Mir<'tcx>, tcx: TyCtxt<'a, 'tcx, 'tcx>) -> MoveD
             TerminatorKind::DropAndReplace { location: ref lval, value: ref val, .. } => {
                 let source = Location { block: bb,
                                         index: bb_data.statements.len() };
+                let assigned_path = bb_ctxt.builder.move_path_for(lval);
+                bb_ctxt.path_map.fill_to(assigned_path.idx());
                 bb_ctxt.on_operand(SK::Use, val, source);
             }
             TerminatorKind::Call { ref func, ref args, ref destination, cleanup: _ } => {
