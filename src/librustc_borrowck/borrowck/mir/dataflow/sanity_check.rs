@@ -157,15 +157,6 @@ pub fn sanity_check_via_rustc_peek<'a, 'tcx, O>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
                 repr::Rvalue::Use(repr::Operand::Constant(_)) =>
                     Effect::Compute,
 
-                repr::Rvalue::Ref(_, _, repr::Lvalue::Projection(ref proj)) => {
-                    if proj.elem == repr::ProjectionElem::Deref {
-                        // tmp = &mut *rhs
-                        Effect::Propagate(&proj.base)
-                    } else {
-                        // tmp = &mut other
-                        Effect::Compute
-                    }
-                }
                 _ => {
                     // (fall back to BitDenotation for all other kinds of Rvalues
                     Effect::Compute
