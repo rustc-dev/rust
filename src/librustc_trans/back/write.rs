@@ -425,7 +425,7 @@ unsafe fn optimize_and_codegen(cgcx: &CodegenContext,
                                config: ModuleConfig,
                                name_extra: String,
                                output_names: OutputFilenames) {
-    let ModuleTranslation { llmod, llcx } = mtrans;
+    let ModuleTranslation { llmod, llcx, .. } = mtrans;
     let tm = config.tm;
 
     // llcx doesn't outlive this function, so we can put this on the stack.
@@ -705,27 +705,31 @@ pub fn run_passes(sess: &Session,
 
     {
         let work = build_work_item(sess,
-                                   trans.metadata_module,
+                                   trans.metadata_module.clone(),
                                    metadata_config.clone(),
                                    crate_output.clone(),
                                    "metadata".to_string());
         work_items.push(work);
     }
 
-    for (index, mtrans) in trans.modules.iter().enumerate() {
+    for mtrans in trans.modules.iter() {
         let work = build_work_item(sess,
-                                   *mtrans,
+                                   mtrans.clone(),
                                    modules_config.clone(),
                                    crate_output.clone(),
-                                   format!("{}", index));
+                                   mtrans.name.clone());
         work_items.push(work);
     }
 
     // Process the work items, optionally using worker threads.
-    if sess.opts.cg.codegen_units == 1 {
+    // NOTE: This code is not really adapted to incremental compilation where
+    //       the compiler decides the number of codegen units (and will
+    //       potentially create hundreds of them).
+    let num_workers = work_items.len() - 1;
+    if num_workers == 1 {
         run_work_singlethreaded(sess, &trans.reachable, work_items);
     } else {
-        run_work_multithreaded(sess, work_items, sess.opts.cg.codegen_units);
+        run_work_multithreaded(sess, work_items, num_workers);
     }
 
     // All codegen is finished.
@@ -743,7 +747,7 @@ pub fn run_passes(sess: &Session,
     let copy_if_one_unit = |ext: &str,
                             output_type: OutputType,
                             keep_numbered: bool| {
-        if sess.opts.cg.codegen_units == 1 {
+        if trans.modules.len() == 1 {
             // 1) Only one codegen unit.  In this case it's no difficulty
             //    to copy `foo.0.x` to `foo.x`.
             copy_gracefully(&crate_output.with_extension(ext),
@@ -781,17 +785,21 @@ pub fn run_passes(sess: &Session,
                 // Copy to .bc, but always keep the .0.bc.  There is a later
                 // check to figure out if we should delete .0.bc files, or keep
                 // them for making an rlib.
-                copy_if_one_unit("0.bc", OutputType::Bitcode, true);
+                // TODO: These are probably wrong
+                copy_if_one_unit("bc", OutputType::Bitcode, true);
             }
             OutputType::LlvmAssembly => {
-                copy_if_one_unit("0.ll", OutputType::LlvmAssembly, false);
+                // TODO: These are probably wrong
+                copy_if_one_unit("ll", OutputType::LlvmAssembly, false);
             }
             OutputType::Assembly => {
-                copy_if_one_unit("0.s", OutputType::Assembly, false);
+                // TODO: These are probably wrong
+                copy_if_one_unit("s", OutputType::Assembly, false);
             }
             OutputType::Object => {
                 user_wants_objects = true;
-                copy_if_one_unit("0.o", OutputType::Object, true);
+                // TODO: These are probably wrong
+                copy_if_one_unit("o", OutputType::Object, true);
             }
             OutputType::Exe |
             OutputType::DepInfo => {}
@@ -833,14 +841,14 @@ pub fn run_passes(sess: &Session,
         let keep_numbered_objects = needs_crate_object ||
                 (user_wants_objects && sess.opts.cg.codegen_units > 1);
 
-        for i in 0..trans.modules.len() {
+        for module_name in trans.modules.iter().map(|m| &m.name[..]) {
             if modules_config.emit_obj && !keep_numbered_objects {
-                let ext = format!("{}.o", i);
+                let ext = format!("{}.o", module_name);
                 remove(sess, &crate_output.with_extension(&ext));
             }
 
             if modules_config.emit_bc && !keep_numbered_bitcode {
-                let ext = format!("{}.bc", i);
+                let ext = format!("{}.bc", module_name);
                 remove(sess, &crate_output.with_extension(&ext));
             }
         }
@@ -906,6 +914,8 @@ fn run_work_singlethreaded(sess: &Session,
 fn run_work_multithreaded(sess: &Session,
                           work_items: Vec<WorkItem>,
                           num_workers: usize) {
+    assert!(num_workers > 0);
+
     // Run some workers to process the work items.
     let work_items_arc = Arc::new(Mutex::new(work_items));
     let mut diag_emitter = SharedEmitter::new();

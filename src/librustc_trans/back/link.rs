@@ -196,7 +196,7 @@ pub fn link_binary(sess: &Session,
 
     // Remove the temporary object file and metadata if we aren't saving temps
     if !sess.opts.cg.save_temps {
-        for obj in object_filenames(sess, outputs) {
+        for obj in object_filenames(trans, outputs) {
             remove(sess, &obj);
         }
         remove(sess, &outputs.with_extension("metadata.o"));
@@ -304,7 +304,7 @@ fn link_binary_output(sess: &Session,
                       crate_type: config::CrateType,
                       outputs: &OutputFilenames,
                       crate_name: &str) -> PathBuf {
-    let objects = object_filenames(sess, outputs);
+    let objects = object_filenames(trans, outputs);
     let default_filename = filename_for_input(sess, crate_type, crate_name,
                                               outputs);
     let out_filename = outputs.outputs.get(&OutputType::Exe)
@@ -348,9 +348,11 @@ fn link_binary_output(sess: &Session,
     out_filename
 }
 
-fn object_filenames(sess: &Session, outputs: &OutputFilenames) -> Vec<PathBuf> {
-    (0..sess.opts.cg.codegen_units).map(|i| {
-        let ext = format!("{}.o", i);
+fn object_filenames(trans: &CrateTranslation,
+                    outputs: &OutputFilenames)
+                    -> Vec<PathBuf> {
+    trans.modules.iter().map(|module| {
+        let ext = format!("{}.o", module.name);
         outputs.temp_path(OutputType::Object).with_extension(&ext)
     }).collect()
 }

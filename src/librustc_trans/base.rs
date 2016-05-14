@@ -2770,7 +2770,11 @@ pub fn trans_crate<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
     }
 
     let modules = crate_context_list.iter()
-        .map(|ccx| ModuleTranslation { llcx: ccx.llcx(), llmod: ccx.llmod() })
+        .map(|ccx| ModuleTranslation {
+            name: String::from(&ccx.codegen_unit().name[..]),
+            llcx: ccx.llcx(),
+            llmod: ccx.llmod()
+        })
         .collect();
 
     let sess = shared_ccx.sess();
@@ -2806,6 +2810,7 @@ pub fn trans_crate<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
     }
 
     let metadata_module = ModuleTranslation {
+        name: "metadata".to_string(),
         llcx: shared_ccx.metadata_llcx(),
         llmod: shared_ccx.metadata_llmod(),
     };
